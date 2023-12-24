@@ -170,60 +170,6 @@ void c8_opcode2NNN(struct chip8 *context, WORD opcode) {
     context->pc = C8_OPCODE_SELECT_NNN(opcode);
 }
 
-#define SKIP_IF_CMP_TO_X(context, opcode, field, eqPrefix, rhs) do {    \
-    C8_OPCODE_SELECT_X##field(opcode);                                  \
-    if ((context)->registers[X] eqPrefix##= rhs) {                      \
-        ++(context)->pc;                                                \
-    }                                                                   \
-} while(0)
-
-#define SKIP_IF_CMP_XNN(context, opcode, eqPrefix) SKIP_IF_CMP_TO_X(context, opcode, NN, eqPrefix, NN)
-#define SKIP_IF_CMP_XYN(context, opcode, eqPrefix) SKIP_IF_CMP_TO_X(context, opcode, YN, eqPrefix, (context)->registers[Y])
-
-void c8_opcode3XNN(struct chip8 *context, WORD opcode) {
-    SKIP_IF_CMP_XNN(context, opcode, =);
-}
-
-void c8_opcode4XNN(struct chip8 *context, WORD opcode) {
-    SKIP_IF_CMP_XNN(context, opcode, !);
-}
-
-void c8_opcode5XY0(struct chip8 *context, WORD opcode) {
-    SKIP_IF_CMP_XYN(context, opcode, =);
-}
-
-#define SET_VX(context, opcode, field, rhs, assignPrefix) do {  \
-    C8_OPCODE_SELECT_X##field(opcode);                          \
-    (context)->registers[X] assignPrefix##= rhs;                \
-} while(0)
-
-#define SET_VX_WITH_NN(context, opcode, assignPrefix) SET_VX(context, opcode, NN, NN, assignPrefix)
-#define SET_VX_WITH_Y(context, opcode, assignPrefix)  SET_VX(context, opcode, YN, (context)->registers[Y], assignPrefix)
-
-void c8_opcode6XNN(struct chip8 *context, WORD opcode) {
-    SET_VX_WITH_NN(context, opcode, );
-}
-
-void c8_opcode7XNN(struct chip8 *context, WORD opcode) {
-    SET_VX_WITH_NN(context, opcode, +);
-}
-
-void c8_opcode8XY0(struct chip8 *context, WORD opcode) {
-    SET_VX_WITH_Y(context, opcode, );
-}
-
-void c8_opcode8XY1(struct chip8 *context, WORD opcode) {
-    SET_VX_WITH_Y(context, opcode, |);
-}
-
-void c8_opcode8XY2(struct chip8 *context, WORD opcode) {
-    SET_VX_WITH_Y(context, opcode, &);
-}
-
-void c8_opcode8XY3(struct chip8 *context, WORD opcode) {
-    SET_VX_WITH_Y(context, opcode, ^);
-}
-
 void c8_opcode8XY4(struct chip8 *context, WORD opcode) {
     int res;
     
@@ -234,20 +180,6 @@ void c8_opcode8XY4(struct chip8 *context, WORD opcode) {
     context->registers[VF] = (res & 0x100) >> 8;        // carry flag if 9nth bit set
 }
 
-#define OPCODE8XY57(context, opcode, regNum1, regNum2) do {                                     \
-    int res, noBorrow, a, b;                                                                    \
-    C8_OPCODE_SELECT_XYN(opcode);                                                                  \
-    a = (context)->registers[regNum1];                                                          \
-    b = (context)->registers[regNum2];                                                          \
-    res = a - b;                                                                                \
-    noBorrow = (res >= 0);                                                                      \
-    (context)->registers[X]  = noBorrow ? res : -res; /* implicitly truncate to 8 bits */       \
-    (context)->registers[VF] = noBorrow;              /* no borrow flag */                      \
-} while(0)
-
-void c8_opcode8XY5(struct chip8 *context, WORD opcode) {
-    OPCODE8XY57(context, opcode, X, Y); // VX -= VY
-}
 
 void c8_opcode8XY6(struct chip8 *context, WORD opcode) {
     C8_OPCODE_SELECT_XYN(opcode);
@@ -256,19 +188,11 @@ void c8_opcode8XY6(struct chip8 *context, WORD opcode) {
     context->registers[X] >>= 1;
 }
 
-void c8_opcode8XY7(struct chip8 *context, WORD opcode) {
-    OPCODE8XY57(context, opcode, Y, X); // VX = VY-VX
-}
-
 void c8_opcode8XYE(struct chip8 *context, WORD opcode) {
     C8_OPCODE_SELECT_XYN(opcode);
 
     context->registers[VF] = (context->registers[X] & 0x80) >> 7; // get MSB
     context->registers[X] <<= 1;
-}
-
-void c8_opcode9XY0(struct chip8 *context, WORD opcode) {
-    SKIP_IF_CMP_XYN(context, opcode, !);
 }
 
 void c8_opcodeANNN(struct chip8 *context, WORD opcode) {
@@ -323,15 +247,6 @@ void c8_opcodeDXYN(struct chip8 *context, WORD opcode) {
     }
 }
 
-void c8_opcodeEX9E(struct chip8 *context, WORD opcode) {
-    // NN is dummy
-    SKIP_IF_CMP_TO_X(context, opcode, NN, =, context->keyPressed);
-}
-
-void c8_opcodeEXA1(struct chip8 *context, WORD opcode) {
-    SKIP_IF_CMP_TO_X(context, opcode, NN, !, context->keyPressed);
-}
-
 void c8_opcodeFX07(struct chip8 *context, WORD opcode) {
     C8_OPCODE_SELECT_XNN(opcode);
     
@@ -347,30 +262,6 @@ void c8_opcodeFX0A(struct chip8 *context, WORD opcode) {
         context->registers[X] = context->keyPressed;
         ++context->pc;  // unlock pc
     }
-}
-
-void c8_opcodeFX15(struct chip8 *context, WORD opcode) {
-    C8_OPCODE_SELECT_XNN(opcode);
-    
-    context->delayTimer = context->registers[X];
-}
-
-void c8_opcodeFX18(struct chip8 *context, WORD opcode) {
-    C8_OPCODE_SELECT_XNN(opcode);
-    
-    context->soundTimer = context->registers[X];
-}
-
-void c8_opcodeFX1E(struct chip8 *context, WORD opcode) {
-    C8_OPCODE_SELECT_XNN(opcode);
-    
-    context->addressI += context->registers[X];
-}
-
-void c8_opcodeFX29(struct chip8 *context, WORD opcode) {
-    C8_OPCODE_SELECT_XNN(opcode);
-
-    context->addressI = context->registers[X];
 }
 
 void c8_opcodeFX33(struct chip8 *context, WORD opcode) {
@@ -396,6 +287,7 @@ void c8_opcodeFX55(struct chip8 *context, WORD opcode) {
 
     for (int i = 0; i <= X; ++i) {
         write_memory(context, addressI++, context->registers[i]);
+        RETURN_ON_ERROR;
     }
 }
 
