@@ -6,8 +6,13 @@ extern "C" {
 #include "chip8.h"
 };
 
-#define REQUIRE_NO_C8_ERROR(ctx)        REQUIRE(c8_get_error(ctx) == C8_GOOD)
-#define REQUIRE_C8_ERROR(ctx, err)      REQUIRE(c8_get_error(ctx) == err)
+#define REQUIRE_C8_PC_EQ(val)       REQUIRE(context->pc == val)
+#define REQUIRE_NO_C8_ERROR         REQUIRE(c8_get_error(context) == C8_GOOD)
+#define REQUIRE_C8_ERROR(err)       REQUIRE(c8_get_error(context) == err)
+#define CLEAR_C8_ERROR              c8_set_error(context, C8_GOOD)
+#define C8_DECODE(opcode)           c8_decode(context, opcode)
+#define C8_DECODE_ERR(opcode, err)  C8_DECODE(opcode); REQUIRE_C8_ERROR(err)
+#define C8_DECODE_NO_ERR(opcode)    C8_DECODE(opcode); REQUIRE_NO_C8_ERROR
 
 bool check_all_zeros(BYTE *arr, size_t arrSize) {
     int res = 0;
@@ -38,7 +43,7 @@ TEST_CASE( "Setup" ) {
         REQUIRE(check_all_zeros(context->registers, REGISTER_COUNT * sizeof(BYTE)));
         REQUIRE(check_all_zeros(context->screenBuffer, SCREEN_BUFFER_SIZE_IN_BYTES));
         REQUIRE(context->sp == USER_MEMORY_END+1);
-        REQUIRE(context->pc == USER_MEMORY_START);
+        REQUIRE_C8_PC_EQ(USER_MEMORY_START);
         REQUIRE(context->addressI == USER_MEMORY_START);
         REQUIRE(context->delayTimer == 0);
         REQUIRE(context->soundTimer == 0);
@@ -49,8 +54,12 @@ TEST_CASE( "Setup" ) {
 
         memset((void*)buf, 1, USER_MEMORY_SIZE_IN_BYTES);
 
+        c8_load_memory(context, buf, USER_MEMORY_SIZE_IN_BYTES+1);
+        REQUIRE_C8_ERROR(C8_LOAD_MEMORY_BUFFER_TOO_LARGE);
+        CLEAR_C8_ERROR;
+
         c8_load_memory(context, buf, USER_MEMORY_SIZE_IN_BYTES);
-        REQUIRE_NO_C8_ERROR(context);
+        REQUIRE_NO_C8_ERROR;
         REQUIRE(check_all_zeros(context->memory + USER_MEMORY_START, USER_MEMORY_SIZE_IN_BYTES) == false);
     }
 
@@ -72,9 +81,10 @@ TEST_CASE( "Fetch" ) {
     pc_start = context->pc;
 
     c8_load_memory(context, prgm, 4);
-    REQUIRE_NO_C8_ERROR(context);
+    REQUIRE_NO_C8_ERROR;
+
     REQUIRE(c8_fetch(context) == ((prgm[0] << 8) | prgm[1]));
-    REQUIRE(context->pc == pc_start+2);
+    REQUIRE_C8_PC_EQ(pc_start+2);
 
     c8_destroy(context);
 }
@@ -89,7 +99,7 @@ TEST_CASE( "Opcode emulation" ) {
     SECTION( "00E0 -- Clear screen" ) {
         memset((void*)(context->screenBuffer), 0xFF, SCREEN_BUFFER_SIZE_IN_BYTES);
         
-        c8_decode(context, 0x00E0);
+        C8_DECODE_NO_ERR(0x00E0);
         REQUIRE(check_all_zeros(context->screenBuffer, SCREEN_BUFFER_SIZE_IN_BYTES));
     }
 
@@ -101,33 +111,37 @@ TEST_CASE( "Opcode emulation" ) {
         context->memory[context->sp++] = context->pc & 0x00FF;
         context->pc = 0x222;
 
-        REQUIRE(context->pc == 0x222);
-        c8_decode(context, 0x00EE);
-        REQUIRE(context->pc == 0x200);
+        REQUIRE_C8_PC_EQ(0x222);
+        C8_DECODE_NO_ERR(0x00EE);
+        REQUIRE_C8_PC_EQ(0x200);
         REQUIRE(context->sp == sp_start);
 
         // Stackunderflow
-        c8_decode(context, 0x00EE);
-        REQUIRE_C8_ERROR(context, C8_STACKUNDERFLOW);
+        C8_DECODE_ERR(0x00EE, C8_STACKUNDERFLOW);
     }
 
     SECTION( "1NNN -- Jump to address NNN" ) {
-        c8_decode(context, 0x1222);
-        REQUIRE(context->pc == 0x222);
+        C8_DECODE_NO_ERR(0x1222);
+        REQUIRE_C8_PC_EQ(0x222);
+
+        C8_DECODE_ERR(0x1FFF, C8_REFUSED_MEM_ACCESS);
     }
 
-    SECTION( "2NN -- Call subroutine at NNN" ) {
+    SECTION( "2NNN -- Call subroutine at NNN" ) {
         WORD sp_start = context->sp;
         WORD pc_start = context->pc;
 
         // Check call
-        c8_decode(context, 0x2222);
+        C8_DECODE_NO_ERR(0x2222);
         REQUIRE(context->sp == (sp_start + 2));
-        REQUIRE(context->pc == 0x222);
+        REQUIRE_C8_PC_EQ(0x222);
 
         // Return
-        c8_decode(context, 0x00EE);
-        REQUIRE(context->pc == pc_start);
+        C8_DECODE_NO_ERR(0x00EE);
+        REQUIRE_C8_PC_EQ(pc_start);
+
+        context->sp = 0xFFFF;
+        C8_DECODE_ERR(0x2222, C8_STACKOVERFLOW);
     }
 
     // TODO: replace by SKIP_IF_CMP_XNN macro test
@@ -135,12 +149,12 @@ TEST_CASE( "Opcode emulation" ) {
         WORD pc_start = context->pc;
 
         // Don't skip
-        c8_decode(context, 0x3111);
-        REQUIRE(context->pc == pc_start);
+        C8_DECODE_NO_ERR(0x3111);
+        REQUIRE_C8_PC_EQ(pc_start);
         
         // Skip
-        c8_decode(context, 0x3100);
-        REQUIRE(context->pc == pc_start+1);
+        C8_DECODE_NO_ERR(0x3100);
+        REQUIRE_C8_PC_EQ(pc_start+1);
     }
 
     // TODO: replace by SKIP_IF_CMP_XYN macro test
@@ -148,26 +162,26 @@ TEST_CASE( "Opcode emulation" ) {
         WORD pc_start = context->pc;
 
         // Skip
-        c8_decode(context, 0x5120);
-        REQUIRE(context->pc == pc_start+1);
+        C8_DECODE_NO_ERR(0x5120);
+        REQUIRE_C8_PC_EQ(pc_start+1);
         
         // Don't skip
         context->registers[1] = 0x01;
-        c8_decode(context, 0x5120);
-        REQUIRE(context->pc == pc_start+1);
+        C8_DECODE_NO_ERR(0x5120);
+        REQUIRE_C8_PC_EQ(pc_start+1);
     }
 
     SECTION( "6XNN to 8XY3 -- Assign, BitOp and Math" ) {
         // 6XNN
-        c8_decode(context, 0x6111);
+        C8_DECODE_NO_ERR(0x6111);
         REQUIRE(context->registers[1] == 0x11);
 
         // 7XNN
-        c8_decode(context, 0x7111);
+        C8_DECODE_NO_ERR(0x7111);
         REQUIRE(context->registers[1] == (0x11 * 2));
 
         // 8XY1
-        c8_decode(context, 0x8211);
+        C8_DECODE_NO_ERR(0x8211);
         REQUIRE(context->registers[2] == (0x11 * 2));
     }
 
@@ -178,12 +192,12 @@ TEST_CASE( "Opcode emulation" ) {
         context->registers[4] = 0x01;
 
         // Carry -- 0xFF + 0xFF
-        c8_decode(context, 0x8124);
+        C8_DECODE_NO_ERR(0x8124);
         REQUIRE(context->registers[1]  == 0xFE);
         REQUIRE(context->registers[VF] == 0x01);
 
         // No carry -- 0x01 + 0x01
-        c8_decode(context, 0x8344);
+        C8_DECODE_NO_ERR(0x8344);
         REQUIRE(context->registers[3]  == 0x02);
         REQUIRE(context->registers[VF] == 0x00);
     }
@@ -195,12 +209,12 @@ TEST_CASE( "Opcode emulation" ) {
         context->registers[4] = 0x01;
 
         // Borrow -- 0x01 - 0x02
-        c8_decode(context, 0x8125);
+        C8_DECODE_NO_ERR(0x8125);
         REQUIRE(context->registers[1]  == 0x01);
         REQUIRE(context->registers[VF] == 0x00);
 
         // No borrow -- 0x02 - 0x01
-        c8_decode(context, 0x8345);
+        C8_DECODE_NO_ERR(0x8345);
         REQUIRE(context->registers[3]  == 0x01);
         REQUIRE(context->registers[VF] == 0x01);
     }
@@ -210,36 +224,44 @@ TEST_CASE( "Opcode emulation" ) {
         context->registers[2] = 0xF0;
 
         // 8XY6
-        c8_decode(context, 0x8106);
+        C8_DECODE_NO_ERR(0x8106);
         REQUIRE(context->registers[VF] == 0x01);
         REQUIRE(context->registers[1]  == 0x01);
 
         // 8XYE
-        c8_decode(context, 0x820E);
+        C8_DECODE_NO_ERR(0x820E);
         REQUIRE(context->registers[VF] == 0x01);
         REQUIRE(context->registers[2]  == 0xE0);
     }
 
     SECTION( "ANNN -- Set address register I" ) {
-        c8_decode(context, 0xA222);
+        C8_DECODE_NO_ERR(0xA222);
         REQUIRE(context->addressI == 0x222);
+
+        C8_DECODE_ERR(0xAFFF, C8_REFUSED_MEM_ACCESS);
     }
 
     SECTION( "BNNN -- Jump to address (NNN + V0)" ) {
         context->registers[0] = 0x22;
 
-        c8_decode(context, 0xB200);
-        REQUIRE(context->pc == 0x222);
+        C8_DECODE_NO_ERR(0xB200);
+        REQUIRE_C8_PC_EQ(0x222);
+
+        C8_DECODE_ERR(0xBFFF, C8_REFUSED_MEM_ACCESS);
     }
 
     SECTION( "Input" ) {
         // EX9E
         context->keyPressed = 0x01;
         context->registers[1] = 0x01;
-        c8_decode(context, 0xE19E);
-        REQUIRE(context->pc == USER_MEMORY_START+1);
+        C8_DECODE_NO_ERR(0xE19E);
+        REQUIRE_C8_PC_EQ(USER_MEMORY_START+1);
 
         //FX0A
+    }
+
+    SECTION( "DYXN -- display sprite" ) {
+        // TODO: test
     }
 
     SECTION( "BCD" ) {
@@ -248,7 +270,7 @@ TEST_CASE( "Opcode emulation" ) {
         i = context->addressI;
         context->registers[1] = 0xF;
 
-        c8_decode(context, 0xF133);
+        C8_DECODE_NO_ERR(0xF133);
         REQUIRE(read_memory(context, i)   == 0x1);
         REQUIRE(read_memory(context, i+1) == 0x1);
         REQUIRE(read_memory(context, i+2) == 0x1);
@@ -262,14 +284,14 @@ TEST_CASE( "Opcode emulation" ) {
         }
 
         // FX65 -- Load
-        c8_decode(context, 0xFF65);
+        C8_DECODE_NO_ERR(0xFF65);
         ITER {
             REQUIRE(context->registers[j] == context->memory[i]);
         }
 
         // FX55 -- Dump
         memset((void*)(context->memory+USER_MEMORY_START), 0, USER_MEMORY_SIZE_IN_BYTES);
-        c8_decode(context, 0xFF55);
+        C8_DECODE_NO_ERR(0xFF55);
         ITER {
             REQUIRE(context->registers[j] == context->memory[i]);
         }
