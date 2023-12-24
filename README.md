@@ -1,6 +1,6 @@
 # chip8
 
-Chip8 emulator written in C. My goal is to get a first hand on emulation and also to get deeper knowledge about C.
+CHIP-8 emulator written in C. My goal is to get a first hand on emulation and also to get deeper knowledge about C.
 
 ## Dependencies
 - [SDL2](https://www.libsdl.org/)
