@@ -121,17 +121,17 @@ void c8_decode(struct chip8 *context, WORD opcode) {
 }
 
 /* Memory access */
-#define CHECK_AUTHORIZED_MEM_ACCESS(address) \
-    if (address < USER_MEMORY_START || address > USER_MEMORY_END) SET_ERROR(C8_REFUSED_MEM_ACCESS);
+#define CHECK_AUTHORIZED_MEM_ACCESS(address, res) \
+    if (address < USER_MEMORY_START || address > USER_MEMORY_END) { SET_ERROR(C8_REFUSED_MEM_ACCESS); return res; }
 
 void write_memory(struct chip8 *context, WORD address, BYTE data) {
-    CHECK_AUTHORIZED_MEM_ACCESS(address);
+    CHECK_AUTHORIZED_MEM_ACCESS(address,)
 
     context->memory[address] = data;
 }
 
 int read_memory(struct chip8 *context, WORD address) {
-    CHECK_AUTHORIZED_MEM_ACCESS(address);
+    CHECK_AUTHORIZED_MEM_ACCESS(address, 0)
     
     return context->memory[address];
 }
@@ -152,12 +152,18 @@ void c8_opcode00EE(struct chip8 *context, WORD opcode) {
 }
 
 void c8_opcode1NNN(struct chip8 *context, WORD opcode) {
-    context->pc = C8_OPCODE_SELECT_NNN(opcode);
+    int nnn = C8_OPCODE_SELECT_NNN(opcode);
+
+    CHECK_AUTHORIZED_MEM_ACCESS(nnn, )
+    context->pc = nnn;
 }
 
 void c8_opcode2NNN(struct chip8 *context, WORD opcode) {
     // Error: Stackoverflow
-    if (context->sp == 0xEFF) SET_ERROR(C8_STACKOVERFLOW);
+    if (context->sp >= 0xEFF) {
+        SET_ERROR(C8_STACKOVERFLOW);
+        return;
+    }
 
     context->memory[context->sp++] = (context->pc >> 8);        // assign upper nibble
     context->memory[context->sp++] = (context->pc & 0x00FF);    // assign lower nibble
@@ -165,7 +171,7 @@ void c8_opcode2NNN(struct chip8 *context, WORD opcode) {
 }
 
 #define SKIP_IF_CMP_TO_X(context, opcode, field, eqPrefix, rhs) do {    \
-    C8_OPCODE_SELECT_X##field(opcode);                                     \
+    C8_OPCODE_SELECT_X##field(opcode);                                  \
     if ((context)->registers[X] eqPrefix##= rhs) {                      \
         ++(context)->pc;                                                \
     }                                                                   \
@@ -187,7 +193,7 @@ void c8_opcode5XY0(struct chip8 *context, WORD opcode) {
 }
 
 #define SET_VX(context, opcode, field, rhs, assignPrefix) do {  \
-    C8_OPCODE_SELECT_X##field(opcode);                             \
+    C8_OPCODE_SELECT_X##field(opcode);                          \
     (context)->registers[X] assignPrefix##= rhs;                \
 } while(0)
 
@@ -266,17 +272,22 @@ void c8_opcode9XY0(struct chip8 *context, WORD opcode) {
 }
 
 void c8_opcodeANNN(struct chip8 *context, WORD opcode) {
-    WORD nnn;
+    WORD nnn = C8_OPCODE_SELECT_NNN(opcode);
 
-    nnn = C8_OPCODE_SELECT_NNN(opcode);
+    CHECK_AUTHORIZED_MEM_ACCESS(nnn,);
+
     context->addressI = nnn;
 }
 
 void c8_opcodeBNNN(struct chip8 *context, WORD opcode) {
     WORD nnn;
 
-    nnn = C8_OPCODE_SELECT_NNN(opcode);
-    context->pc = (nnn + context->registers[0]);
+    nnn  = C8_OPCODE_SELECT_NNN(opcode);
+    nnn += context->registers[0];
+
+    CHECK_AUTHORIZED_MEM_ACCESS(nnn, )
+
+    context->pc = nnn;
 }
 
 void c8_opcodeCXNN(struct chip8 *context, WORD opcode) {
@@ -295,7 +306,7 @@ void c8_opcodeDXYN(struct chip8 *context, WORD opcode) {
     
     for (int i  = 0; i < N; ++i) {
         for (int j = 0; j < 8; ++j) {
-            assert(bufIndex < SCREEN_BUFFER_SIZE_IN_BYTES);
+            assert(bufIndex < SCREEN_BUFFER_SIZE_IN_BYTES); // can be considered as scroll
 
             int spritePixel, screenPixel, newPixel;
             
@@ -368,7 +379,7 @@ void c8_opcodeFX33(struct chip8 *context, WORD opcode) {
 
     C8_OPCODE_SELECT_XNN(opcode);
 
-    i  = context->addressI;
+    i   = context->addressI;
     res = (context->registers[X] & 0x7);
 
     write_memory(context, i,   (res >> 2) & 0x1);  RETURN_ON_ERROR;
