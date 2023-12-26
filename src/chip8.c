@@ -27,7 +27,6 @@ void       c8_set_error(struct chip8 *context, c8_error_t error) { context->m_er
 void c8_reset(struct chip8 *context, C8_PixelRenderer renderer, void **rendererUserData) {
     context->memory         = (BYTE*)calloc(MEMORY_SIZE_IN_BYTES, sizeof(BYTE));
     context->registers      = (BYTE*)calloc(REGISTER_COUNT, sizeof(BYTE));
-    context->screenBuffer   = (BYTE*)calloc(SCREEN_BUFFER_SIZE_IN_BYTES, sizeof(BYTE));
     context->sp             = USER_MEMORY_END + 1;
     context->addressI       = 0;
     context->pc             = USER_MEMORY_START;
@@ -38,12 +37,17 @@ void c8_reset(struct chip8 *context, C8_PixelRenderer renderer, void **rendererU
     context->m_error        = (c8_error_t){ C8_GOOD, "" };
     context->m_renderer     = renderer;
     context->m_renUserData  = rendererUserData;
+
+    // set array to zeros
+    memset((void*)context->screenBuffer, 0, SCREEN_WIDTH*SCREEN_HEIGHT);
+
+    // preload font
+    memcpy((void*)context->memory, (void*)font, sizeof font / sizeof font[0]);
 }
 
 void c8_destroy(struct chip8 *context) {
     free(context->memory);
     free(context->registers);
-    free(context->screenBuffer);
 }
 
 void c8_load_prgm(struct chip8 *context, FILE *fp) {
@@ -242,7 +246,7 @@ void c8_opcodeCXNN(struct chip8 *context, WORD opcode) {
 void c8_opcodeDXYN(struct chip8 *context, WORD opcode) {
     int x, y;
     int addressI, bufIndex;
-    BYTE spritePixelRow, screenPixelRow, newPixelRow, pixel;
+    BYTE spritePixelRow;
 
     C8_OPCODE_SELECT_XYN(opcode);
 
@@ -250,29 +254,32 @@ void c8_opcodeDXYN(struct chip8 *context, WORD opcode) {
     x = context->registers[X];
     y = context->registers[Y];
     addressI = context->addressI;
-    bufIndex = (x + (y * SCREEN_WIDTH)) / 8; // screenBuffer accessed by row
-
 
     context->registers[VF] = 0; // reset VF
     
     // loop through 8*N sprite
     for (int row  = 0; row < N; ++row) {
+        int px, py;
         assert(bufIndex < SCREEN_BUFFER_SIZE_IN_BYTES); // can be considered as scroll
 
-        spritePixelRow = read_memory(context, addressI);   RETURN_ON_ERROR;
-        screenPixelRow = context->screenBuffer[bufIndex];
-        newPixelRow = screenPixelRow ^ spritePixelRow;                                        // flip screen pixels
+        spritePixelRow = read_memory(context, context->addressI + row);   RETURN_ON_ERROR;
+         
+        // check collision
+        py = y + row;
 
-        context->screenBuffer[bufIndex] = newPixelRow;                                        // set new pixel
-        context->registers[VF] |= ( (screenPixelRow & newPixelRow) != screenPixelRow );       // check collision
+        for (int col = 0, curPixel = 0x80; col < 8; ++col, curPixel >>= 1) {
+            px = x + col;
+            
+            if (spritePixelRow & curPixel) {
+                if (context->screenBuffer[px][py] == 1) {
+                    context->registers[VF] = 1;
+                }
 
-        for (int col = 0, off = 7; col < 8; ++col) {
-            pixel = ( (newPixelRow >> (off--)) & 0x1 );
-            context->m_renderer(pixel, (x+col), (y+row), context->m_renUserData);
+                context->screenBuffer[px][py] ^= 1;
+            }
+
+            context->m_renderer(context->screenBuffer[px][py], px, py, context->m_renUserData);
         }
-
-        ++addressI;
-        ++bufIndex;
     }
 }
 
