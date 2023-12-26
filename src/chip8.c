@@ -4,19 +4,27 @@
 #include <stdlib.h>
 #include <assert.h>
 
-#include <stdio.h>
+#define SET_ERROR_1(err)      c8_set_error(context, (c8_error_t){err, ""})
+#define SET_ERROR_2(err, msg) c8_set_error(context, (c8_error_t){err, msg})
 
-#define SET_ERROR(error) c8_set_error(context, error)
-#define GET_ERROR        c8_get_error(context)
-#define RETURN_ON_ERROR  if (GET_ERROR != C8_GOOD) return
+#define SET_ERROR_X(err, msg, FUNC, ...) FUNC
+#define SET_ERROR_MACRO_CHOOSER(...)                                                 \
+    SET_ERROR_X(__VA_ARGS__, SET_ERROR_2, SET_ERROR_1, )
+#define SET_ERROR(...) SET_ERROR_MACRO_CHOOSER(__VA_ARGS__)(__VA_ARGS__)
+
+#define GET_ERROR           c8_get_error(context)
+#define RETURN_ON_ERROR  if (GET_ERROR.err != C8_GOOD) return
+
+#define INCREMENENT_PC  context->pc += 2
+#define DECREMENENT_PC  context->pc -= 2
 
 /* Error handling */
-c8_error c8_get_error(struct chip8 *context) { return context->m_error; }
-void     c8_set_error(struct chip8 *context, c8_error error) { context->m_error = error; }
+c8_error_t c8_get_error(struct chip8 *context) { return context->m_error; }
+void       c8_set_error(struct chip8 *context, c8_error_t error) { context->m_error = error; }
 
 /* Setup */
 
-void c8_reset(struct chip8 *context) {
+void c8_reset(struct chip8 *context, C8_PixelRenderer renderer, void **rendererUserData) {
     context->memory         = (BYTE*)calloc(MEMORY_SIZE_IN_BYTES, sizeof(BYTE));
     context->registers      = (BYTE*)calloc(REGISTER_COUNT, sizeof(BYTE));
     context->screenBuffer   = (BYTE*)calloc(SCREEN_BUFFER_SIZE_IN_BYTES, sizeof(BYTE));
@@ -26,7 +34,10 @@ void c8_reset(struct chip8 *context) {
     context->addressI       = USER_MEMORY_START;
     context->delayTimer     = 0;
     context->soundTimer     = 0;
-    context->m_error        = C8_GOOD;
+    context->keyPressed     = -1;
+    context->m_error        = (c8_error_t){ C8_GOOD, "" };
+    context->m_renderer     = renderer;
+    context->m_renUserData  = rendererUserData;
 }
 
 void c8_destroy(struct chip8 *context) {
@@ -35,14 +46,20 @@ void c8_destroy(struct chip8 *context) {
     free(context->screenBuffer);
 }
 
-void c8_load_memory(struct chip8 *context, BYTE *buffer, size_t bufferSize) {
-    if (bufferSize > USER_MEMORY_SIZE_IN_BYTES) {
+void c8_load_prgm(struct chip8 *context, FILE *fp) {
+    size_t sz;
+    
+    fseek(fp, 0L, SEEK_END);
+    sz = ftell(fp);
+    fseek(fp, 0L, SEEK_SET);
+
+    if (sz > USER_MEMORY_SIZE_IN_BYTES) {
         SET_ERROR(C8_LOAD_MEMORY_BUFFER_TOO_LARGE);
         return;
     }
 
     memset((void*)(context->memory + USER_MEMORY_START), 0, USER_MEMORY_SIZE_IN_BYTES);
-    memcpy((void*)(context->memory + USER_MEMORY_START), (void*)buffer, bufferSize);
+    fread((void*)(context->memory + USER_MEMORY_START), sz, 1, fp);
 }
 
 /* Fetch-decode */
@@ -50,19 +67,21 @@ void c8_load_memory(struct chip8 *context, BYTE *buffer, size_t bufferSize) {
 WORD c8_fetch(struct chip8 *context) {
     WORD res;
 
-    res  = (context->memory[context->pc++] << 8);
-    res |=  context->memory[context->pc++];
+    res  = (context->memory[context->pc] << 8);
+    res |=  context->memory[context->pc + 1];
+    INCREMENENT_PC;
 
     return res;
 }
 
 void c8_decode(struct chip8 *context, WORD opcode) {
+#define SET_INVALID_OPCODE_ERROR(s) SET_ERROR(C8_DECODE_INVALID_OPCODE, s);             
     switch(C8_OPCODE_SELECT_OP(opcode)) {
         case 0x0:
             switch(opcode) {
                 case 0x00E0: c8_opcode00E0(context, opcode); break;
                 case 0x00EE: c8_opcode00EE(context, opcode); break;
-                default: SET_ERROR(C8_DECODE_INVALID_OPCODE); return;
+                default: SET_INVALID_OPCODE_ERROR("00EH"); return;
             } 
 
             break;
@@ -84,7 +103,7 @@ void c8_decode(struct chip8 *context, WORD opcode) {
                 case 0x6: c8_opcode8XY6(context, opcode); break;
                 case 0x7: c8_opcode8XY7(context, opcode); break;
                 case 0xE: c8_opcode8XYE(context, opcode); break;
-                default: SET_ERROR(C8_DECODE_INVALID_OPCODE); return;
+                default: SET_INVALID_OPCODE_ERROR("8XYH"); return;
             }
 
             break;
@@ -97,7 +116,7 @@ void c8_decode(struct chip8 *context, WORD opcode) {
             switch(C8_OPCODE_SELECT_NN(opcode)) {
                 case 0x9E: c8_opcodeEX9E(context, opcode); break;
                 case 0xA1: c8_opcodeEXA1(context, opcode); break;
-                default: SET_ERROR(C8_DECODE_INVALID_OPCODE); return;
+                default: SET_INVALID_OPCODE_ERROR("EXHH"); return;
             }
 
             break;
@@ -112,26 +131,26 @@ void c8_decode(struct chip8 *context, WORD opcode) {
                 case 0x33: c8_opcodeFX33(context, opcode); break;
                 case 0x55: c8_opcodeFX55(context, opcode); break;
                 case 0x65: c8_opcodeFX55(context, opcode); break;
-                default: SET_ERROR(C8_DECODE_INVALID_OPCODE); return;
+                default: SET_INVALID_OPCODE_ERROR("FXHH"); return;
             }
 
             break;
-        default: SET_ERROR(C8_DECODE_INVALID_OPCODE); return;
+        default: SET_INVALID_OPCODE_ERROR("HHHH"); return;
     }
 }
 
 /* Memory access */
-#define CHECK_AUTHORIZED_MEM_ACCESS(address, res) \
-    if (address < USER_MEMORY_START || address > USER_MEMORY_END) { SET_ERROR(C8_REFUSED_MEM_ACCESS); return res; }
+#define CHECK_AUTHORIZED_MEM_ACCESS(address, msg, res) \
+    if (address > USER_MEMORY_END) { SET_ERROR(C8_REFUSED_MEM_ACCESS, msg); return res; }
 
 void write_memory(struct chip8 *context, WORD address, BYTE data) {
-    CHECK_AUTHORIZED_MEM_ACCESS(address,)
+    CHECK_AUTHORIZED_MEM_ACCESS(address, "Error accessing memory", );
 
     context->memory[address] = data;
 }
 
 int read_memory(struct chip8 *context, WORD address) {
-    CHECK_AUTHORIZED_MEM_ACCESS(address, 0)
+    CHECK_AUTHORIZED_MEM_ACCESS(address, "Error reading memory", 0)
     
     return context->memory[address];
 }
@@ -154,7 +173,7 @@ void c8_opcode00EE(struct chip8 *context, WORD opcode) {
 void c8_opcode1NNN(struct chip8 *context, WORD opcode) {
     int nnn = C8_OPCODE_SELECT_NNN(opcode);
 
-    CHECK_AUTHORIZED_MEM_ACCESS(nnn, )
+    CHECK_AUTHORIZED_MEM_ACCESS(nnn, "Error in 1NNN",)
     context->pc = nnn;
 }
 
@@ -198,7 +217,7 @@ void c8_opcode8XYE(struct chip8 *context, WORD opcode) {
 void c8_opcodeANNN(struct chip8 *context, WORD opcode) {
     WORD nnn = C8_OPCODE_SELECT_NNN(opcode);
 
-    CHECK_AUTHORIZED_MEM_ACCESS(nnn,);
+    CHECK_AUTHORIZED_MEM_ACCESS(nnn, "Error in ANNN",);
 
     context->addressI = nnn;
 }
@@ -209,41 +228,51 @@ void c8_opcodeBNNN(struct chip8 *context, WORD opcode) {
     nnn  = C8_OPCODE_SELECT_NNN(opcode);
     nnn += context->registers[0];
 
-    CHECK_AUTHORIZED_MEM_ACCESS(nnn, )
+    CHECK_AUTHORIZED_MEM_ACCESS(nnn, "Error in BNNN",)
 
     context->pc = nnn;
 }
 
 void c8_opcodeCXNN(struct chip8 *context, WORD opcode) {
-    // TODO: gen rand
+    C8_OPCODE_SELECT_XNN(opcode);
+
+    context->registers[X] = (rand() & NN);
 }
 
 void c8_opcodeDXYN(struct chip8 *context, WORD opcode) {
+    int x, y;
     int addressI, bufIndex;
+    BYTE spritePixelRow, screenPixelRow, newPixelRow, pixel;
 
     C8_OPCODE_SELECT_XYN(opcode);
 
+
+    x = context->registers[X];
+    y = context->registers[Y];
     addressI = context->addressI;
-    bufIndex = X + Y * SCREEN_WIDTH;
+    bufIndex = (x + (y * SCREEN_WIDTH)) / 8; // screenBuffer accessed by row
+
 
     context->registers[VF] = 0; // reset VF
     
-    for (int i  = 0; i < N; ++i) {
-        for (int j = 0; j < 8; ++j) {
-            assert(bufIndex < SCREEN_BUFFER_SIZE_IN_BYTES); // can be considered as scroll
+    // loop through 8*N sprite
+    for (int row  = 0; row < N; ++row) {
+        assert(bufIndex < SCREEN_BUFFER_SIZE_IN_BYTES); // can be considered as scroll
 
-            int spritePixel, screenPixel, newPixel;
-            
-            spritePixel = read_memory(context, addressI);   RETURN_ON_ERROR;
-            screenPixel = context->screenBuffer[bufIndex];
-            newPixel = spritePixel ^ screenPixel;
+        spritePixelRow = read_memory(context, addressI);   RETURN_ON_ERROR;
+        screenPixelRow = context->screenBuffer[bufIndex];
+        newPixelRow = screenPixelRow ^ spritePixelRow;                                        // flip screen pixels
 
-            context->screenBuffer[bufIndex] = newPixel;     // set new pixel
-            context->registers[VF] |= newPixel;             // if set, never unset
+        context->screenBuffer[bufIndex] = newPixelRow;                                        // set new pixel
+        context->registers[VF] |= ( (screenPixelRow & newPixelRow) != screenPixelRow );       // check collision
 
-            ++bufIndex;
-            ++addressI; // get next pixel
+        for (int col = 0, off = 7; col < 8; ++col) {
+            pixel = ( (newPixelRow >> (off--)) & 0x1 );
+            context->m_renderer(pixel, (x+col), (y+row), context->m_renUserData);
         }
+
+        ++addressI;
+        ++bufIndex;
     }
 }
 
@@ -256,11 +285,11 @@ void c8_opcodeFX07(struct chip8 *context, WORD opcode) {
 void c8_opcodeFX0A(struct chip8 *context, WORD opcode) {
     C8_OPCODE_SELECT_XNN(opcode);
 
-    --context->pc; // lock pc
+    DECREMENENT_PC; // lock pc
 
     if(context->keyPressed != -1) {
         context->registers[X] = context->keyPressed;
-        ++context->pc;  // unlock pc
+        INCREMENENT_PC;  // unlock pc
     }
 }
 

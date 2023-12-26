@@ -2,6 +2,7 @@
 #define CHIP8_H
 
 #include <stddef.h>
+#include <stdio.h>
 
 #define VF (BYTE)0xF
 #define MEMORY_SIZE_IN_BYTES 0xFFF
@@ -11,10 +12,12 @@
 #define REGISTER_COUNT 16
 #define SCREEN_WIDTH 64
 #define SCREEN_HEIGHT 32
-#define SCREEN_BUFFER_SIZE_IN_BYTES ( (SCREEN_WIDTH * SCREEN_HEIGHT) / 8 )
+#define SCREEN_BUFFER_SIZE_IN_BITS  ( SCREEN_WIDTH * SCREEN_HEIGHT )
+#define SCREEN_BUFFER_SIZE_IN_BYTES ( SCREEN_BUFFER_SIZE_IN_BITS / 8 )
 
 typedef unsigned char BYTE;
 typedef unsigned short WORD;
+typedef void (*C8_PixelRenderer)(int pixel, int x, int y, void **userData);
 
 typedef enum {
     C8_GOOD,
@@ -26,30 +29,39 @@ typedef enum {
     C8_CLEAR_SCREEN
 } c8_error;
 
+typedef struct {
+    c8_error err;
+    char *msg;
+} c8_error_t;
+
 /**
  * @brief Chip8 context
 */
 struct chip8 {
-    BYTE        *memory;               // 4KiB memory
-    BYTE        *registers;            // 8-bit registers V0 to VF
-    WORD         sp;                   // stack pointer. 12 levels of nesting (0xEA0-0xEFF)
-    WORD         addressI;             // only 12 lowers bits used
-    WORD         pc;                   // program counter
-    BYTE        *screenBuffer;
-    BYTE         delayTimer;           // Both timers count at 60hz until reaching 0
-    BYTE         soundTimer;
-    int          keyPressed;           // 0-F (-1 when depressed)
-    c8_error     m_error;
+    BYTE            *memory;               // 4KiB memory
+    BYTE            *registers;            // 8-bit registers V0 to VF
+    WORD             sp;                   // stack pointer. 12 levels of nesting (0xEA0-0xEFF)
+    WORD             addressI;             // only 12 lowers bits used
+    WORD             pc;                   // program counter
+    BYTE            *screenBuffer;
+    BYTE             delayTimer;           // Both timers count at 60hz until reaching 0
+    BYTE             soundTimer;
+    int              keyPressed;           // 0-F (-1 when depressed)
+    c8_error_t       m_error;
+
+    // functions
+    C8_PixelRenderer m_renderer;
+    void **m_renUserData;
 };
 
 /* Error handling */
-c8_error c8_get_error(struct chip8 *context);
-void     c8_set_error(struct chip8 *context, c8_error error);
+c8_error_t c8_get_error(struct chip8 *context);
+void       c8_set_error(struct chip8 *context, c8_error_t error);
 
 /* Setup */
-void c8_reset(struct chip8 *context);
+void c8_reset(struct chip8 *context, C8_PixelRenderer renderer, void **rendererUserData);
 void c8_destroy(struct chip8 *context);
-void c8_load_memory(struct chip8 *context, BYTE *buffer, size_t bufferSize);
+void c8_load_prgm(struct chip8 *context, FILE *fp);
 
 /* Fetch-decode */
 WORD c8_fetch(struct chip8 *context);
@@ -88,7 +100,7 @@ int  read_memory(struct chip8 *context, WORD address);
 #define _C8_SKIP_IF_CMP_TO_X(field, eqPrefix, rhs) do {                                         \
     C8_OPCODE_SELECT_X##field(opcode);                                                          \
     if ((context)->registers[X] eqPrefix##= rhs) {                                              \
-        ++(context)->pc;                                                                        \
+        (context)->pc += 2;                                                                     \
     }                                                                                           \
 } while(0)
 
