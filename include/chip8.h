@@ -38,20 +38,42 @@ typedef struct {
  * @brief Chip8 context
 */
 struct chip8 {
-    BYTE            *memory;               // 4KiB memory
-    BYTE            *registers;            // 8-bit registers V0 to VF
-    WORD             sp;                   // stack pointer. 12 levels of nesting (0xEA0-0xEFF)
-    WORD             addressI;             // only 12 lowers bits used
-    WORD             pc;                   // program counter
-    BYTE            *screenBuffer;
-    BYTE             delayTimer;           // Both timers count at 60hz until reaching 0
+    BYTE            *memory;                                        // 4KiB memory
+    BYTE            *registers;                                     // 8-bit registers V0 to VF
+    WORD             sp;                                            // stack pointer. 12 levels of nesting (0xEA0-0xEFF)
+    WORD             addressI;                                      // only 12 lowers bits used
+    WORD             pc;                                            // program counter
+    BYTE             screenBuffer[SCREEN_WIDTH][SCREEN_HEIGHT];
+    BYTE             delayTimer;                                    // Both timers count at 60hz until reaching 0
     BYTE             soundTimer;
-    int              keyPressed;           // 0-F (-1 when depressed)
+    int              keyPressed;                                    // 0-F (-1 when depressed)
     c8_error_t       m_error;
 
     // functions
     C8_PixelRenderer m_renderer;
     void **m_renUserData;
+};
+
+// font data
+#define FONT_WIDTH 4
+#define FONT_HEIGHT 5
+static const BYTE font[] = {
+    0xF0, 0x90, 0x90, 0x90, 0xF0,
+    0x20, 0x60, 0x20, 0x20, 0x70,
+    0xF0, 0x10, 0xF0, 0x80, 0xF0,
+    0xF0, 0x10, 0xF0, 0x10, 0xF0,
+    0x90, 0x90, 0xF0, 0x10, 0x10,
+    0xF0, 0x80, 0xF0, 0x10, 0xF0,
+    0xF0, 0x80, 0xF0, 0x90, 0xF0,
+    0xF0, 0x10, 0x20, 0x40, 0x40,
+    0xF0, 0x90, 0xF0, 0x90, 0xF0,
+    0xF0, 0x90, 0xF0, 0x10, 0xF0,
+    0xF0, 0x90, 0xF0, 0x90, 0x90,
+    0xE0, 0x90, 0xE0, 0x90, 0xE0,
+    0xF0, 0x80, 0x80, 0x80, 0xF0,
+    0xE0, 0x90, 0x90, 0x90, 0xE0,
+    0xF0, 0x80, 0xF0, 0x80, 0xF0,
+    0xF0, 0x80, 0xF0, 0x80, 0x80,
 };
 
 /* Error handling */
@@ -191,7 +213,7 @@ void c8_opcodeFX0A(struct chip8 *context, WORD opcode);    // Wait for any key p
 // Add VX to I. VF unchanged
 #define c8_opcodeFX1E(context, opcode)  _ASSIGN(NN, context->addressI,   context->registers[X], +);   
 // Set I to sprite address for the characheter in VX
-#define c8_opcodeFX29(context, opcode)  _ASSIGN(NN, context->addressI,   context->registers[X], );    
+#define c8_opcodeFX29(context, opcode)  _ASSIGN(NN, context->addressI,   context->registers[X]*FONT_HEIGHT, );    
 
 void c8_opcodeFX33(struct chip8 *context, WORD opcode);    // Store BCD representation of VX (hundreds at I, tens at I+1 and ones at I+2)
 void c8_opcodeFX55(struct chip8 *context, WORD opcode);    // Dump V0 to VX (included) in memory, starting at address I (I unchanged)
