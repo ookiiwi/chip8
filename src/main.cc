@@ -6,32 +6,37 @@
 #include <SDL.h>
 
 #define PIXEL_SCALE 10
-#define WINDOW_WIDTH  64*PIXEL_SCALE
-#define WINDOW_HEIGHT 32*PIXEL_SCALE
+#define WINDOW_WIDTH  SCREEN_WIDTH  * PIXEL_SCALE
+#define WINDOW_HEIGHT SCREEN_HEIGHT * PIXEL_SCALE
 
-#define _EXTRACT_RENDERER_FROM_USER_DATA(userData)  SDL_Renderer *renderer = (SDL_Renderer*)(*userData)
+void copy_c8_screenBuffer(SDL_Texture *texture, struct chip8 *context) {
+    void    *pixels;
+    int      pitch;
+    Uint8   *base;
 
-void pixel_clear(void **userData) {
-    _EXTRACT_RENDERER_FROM_USER_DATA(userData);
+    SDL_LockTexture(texture, NULL, &pixels, &pitch);
 
-    SDL_RenderClear(renderer);
-}
+    for(int row = 0; row < SCREEN_HEIGHT; ++row) {
+        int y = row * PIXEL_SCALE;
 
-void pixel_render(void **userData) {
-    _EXTRACT_RENDERER_FROM_USER_DATA(userData);
+        for(int col = 0; col < SCREEN_WIDTH; ++col) {
+            int x = col * PIXEL_SCALE;
+            int i = (row * SCREEN_WIDTH) + col;
+            int color = (context->screenBuffer[i] == 0 ? 0x00 : 0xFF);
 
-    SDL_RenderPresent(renderer);
-}
+            for(int i = 0; i < PIXEL_SCALE; ++i) {          // fill on x
+                for (int j = 0; j < PIXEL_SCALE; ++j)  {    // fill on y
+                    base = ((Uint8*)pixels) + (4 * ((y + j) * WINDOW_WIDTH + x + i));
+                    base[0] = color;
+                    base[1] = color;
+                    base[2] = color;
+                    base[3] = 0xFF;
+                }
+            }
+        }
+    }
 
-void pixel_set(int pixel, int x, int y, void **userData) {
-    int color;
-
-    _EXTRACT_RENDERER_FROM_USER_DATA(userData);
-
-    color = (pixel == 0 ? 0x00 : 0xFF); 
-
-    SDL_SetRenderDrawColor(renderer, color, color, color, 0xFF);
-    SDL_RenderDrawPoint(renderer, x, y);
+    SDL_UnlockTexture(texture);
 }
 
 int load_prgm(struct chip8 *context, int argc, char **argv) {
@@ -53,10 +58,10 @@ int main(int argc, char** argv) {
     int bRunning;
     struct chip8 _context;
     struct chip8 *context;
-    struct c8_renderer c8Renderer;  // TODO: replace by copying screenBuffer
     WORD opcode;
     SDL_Window   *window;
     SDL_Renderer *renderer;
+    SDL_Texture  *texture;
     Uint64 prevTicks, ticks, delta;
 
     /* init components */
@@ -83,30 +88,21 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    SDL_RenderSetScale(renderer, PIXEL_SCALE, PIXEL_SCALE);
-
-    c8Renderer.clear = pixel_clear;
-    c8Renderer.render = pixel_render;
-    c8Renderer.set_pixel = pixel_set;
-    c8Renderer.userData = (void**)&renderer;
-
-    c8_reset(context, &c8Renderer);
-    int rv = load_prgm(context, argc, argv);
-    if (rv != 0 ) {
-        cleanup(context, texture, surface, renderer, window);
-        printf("load_prgm Error\n");
+    texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, WINDOW_WIDTH, WINDOW_HEIGHT);
+    if (texture == NULL) {
+        cleanup(renderer, window);
+        printf("SDL_CreateTexture Error: %s\n", SDL_GetError());
         SDL_Quit();
         return 1;
     }
 
-    {
-        SDL_Rect rect;
-        rect.x = WINDOW_WIDTH;
-        rect.y = 0;
-        rect.w = 100;
-        rect.y = WINDOW_HEIGHT;
-        SDL_SetRenderDrawColor(renderer, 0xff, 0xf1, 0xff, 0xff);
-        SDL_RenderFillRect(renderer, &rect);
+    c8_reset(context);
+    int rv = load_prgm(context, argc, argv);
+    if (rv != 0 ) {
+        cleanup(context, texture, renderer, window);
+        printf("load_prgm Error\n");
+        SDL_Quit();
+        return 1;
     }
 
     while(bRunning) {
@@ -131,6 +127,7 @@ int main(int argc, char** argv) {
             }
         }
 
+
         if (delta > (1000/600.0)) {
             if (c8_tick(context) != 0) {
                 break;
@@ -139,9 +136,14 @@ int main(int argc, char** argv) {
             prevTicks = ticks;
         }
 
+        // As screenBuffer overrides texture pixels, no need to call SDL_RenderClear
+        copy_c8_screenBuffer(texture, context);
+        SDL_RenderCopy(renderer, texture, NULL, NULL);
+        SDL_RenderPresent(renderer);
+
     }
 
-    cleanup(context, renderer, window);
+    cleanup(context, texture, renderer, window);
     SDL_Quit();
     
     return 0;
