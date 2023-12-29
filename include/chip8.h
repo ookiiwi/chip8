@@ -1,6 +1,10 @@
 #ifndef CHIP8_H
 #define CHIP8_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 #include <stdio.h>
 #include <time.h>
@@ -226,5 +230,9 @@ void c8_opcodeFX0A(struct chip8 *context, WORD opcode);    // Wait for any key p
 void c8_opcodeFX33(struct chip8 *context, WORD opcode);    // Store BCD representation of VX (hundreds at I, tens at I+1 and ones at I+2)
 void c8_opcodeFX55(struct chip8 *context, WORD opcode);    // Dump V0 to VX (included) in memory, starting at address I (I unchanged)
 void c8_opcodeFX65(struct chip8 *context, WORD opcode);    // Load memory content in V0 to VX (included), starting at address I (I unchanged)
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
