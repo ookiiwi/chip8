@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdio.h>
+#include <time.h>
 
 #define VF (BYTE)0xF
 #define MEMORY_SIZE_IN_BYTES 0xFFF
@@ -17,7 +18,9 @@
 
 typedef unsigned char BYTE;
 typedef unsigned short WORD;
-typedef void (*C8_PixelRenderer)(int pixel, int x, int y, void **userData);
+typedef void (*C8_PixelSetter)(int pixel, int x, int y, void **userData);
+typedef void (*C8_PixelClearer)(void **userData);
+typedef void (*C8_PixelRenderer)(void **userData);
 
 typedef enum {
     C8_GOOD,
@@ -34,24 +37,28 @@ typedef struct {
     char *msg;
 } c8_error_t;
 
+struct c8_renderer {
+    C8_PixelClearer clear;
+    C8_PixelRenderer render;
+    C8_PixelSetter set_pixel;
+    void **userData;
+};
+
 /**
  * @brief Chip8 context
 */
 struct chip8 {
-    BYTE            *memory;                                        // 4KiB memory
-    BYTE            *registers;                                     // 8-bit registers V0 to VF
-    WORD             sp;                                            // stack pointer. 12 levels of nesting (0xEA0-0xEFF)
-    WORD             addressI;                                      // only 12 lowers bits used
-    WORD             pc;                                            // program counter
-    BYTE             screenBuffer[SCREEN_WIDTH][SCREEN_HEIGHT];
-    BYTE             delayTimer;                                    // Both timers count at 60hz until reaching 0
-    BYTE             soundTimer;
-    int              keyPressed;                                    // 0-F (-1 when depressed)
-    c8_error_t       m_error;
-
-    // functions
-    C8_PixelRenderer m_renderer;
-    void **m_renUserData;
+    BYTE                 *memory;                                        // 4KiB memory
+    BYTE                 *registers;                                     // 8-bit registers V0 to VF
+    WORD                  sp;                                            // stack pointer. 12 levels of nesting (0xEA0-0xEFF)
+    WORD                  addressI;                                      // only 12 lowers bits used
+    WORD                  pc;                                            // program counter
+    BYTE                  screenBuffer[SCREEN_WIDTH][SCREEN_HEIGHT];
+    BYTE                  delayTimer;                                    // Both timers count at 60hz until reaching 0
+    BYTE                  soundTimer;
+    int                   keyPressed;                                    // 0-F (-1 when depressed)
+    c8_error_t            m_error;
+    struct c8_renderer   *m_renderer;
 };
 
 // font data
@@ -81,11 +88,12 @@ c8_error_t c8_get_error(struct chip8 *context);
 void       c8_set_error(struct chip8 *context, c8_error_t error);
 
 /* Setup */
-void c8_reset(struct chip8 *context, C8_PixelRenderer renderer, void **rendererUserData);
+void c8_reset(struct chip8 *context, struct c8_renderer *renderer);
 void c8_destroy(struct chip8 *context);
 void c8_load_prgm(struct chip8 *context, FILE *fp);
 
 /* Fetch-decode */
+int c8_tick(struct chip8 *context);
 WORD c8_fetch(struct chip8 *context);
 void c8_decode(struct chip8 *context, WORD opcode);
 
