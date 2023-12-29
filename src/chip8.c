@@ -24,9 +24,10 @@ void       c8_set_error(struct chip8 *context, c8_error_t error) { context->m_er
 
 /* Setup */
 
-void c8_reset(struct chip8 *context, struct c8_renderer *renderer) {
+void c8_reset(struct chip8 *context) {
     context->memory         = (BYTE*)calloc(MEMORY_SIZE_IN_BYTES, sizeof(BYTE));
     context->registers      = (BYTE*)calloc(REGISTER_COUNT, sizeof(BYTE));
+    context->screenBuffer   = (BYTE*)calloc(SCREEN_BUFFER_SIZE_IN_BITS, sizeof(BYTE));
     context->sp             = USER_MEMORY_END + 1;
     context->addressI       = 0;
     context->pc             = USER_MEMORY_START;
@@ -35,11 +36,6 @@ void c8_reset(struct chip8 *context, struct c8_renderer *renderer) {
     context->soundTimer     = 0;
     context->keyPressed     = -1;
     context->m_error        = (c8_error_t){ C8_GOOD, "" };
-
-    context->m_renderer     = renderer;
-
-    // set array to zeros
-    memset((void*)context->screenBuffer, 0, SCREEN_WIDTH*SCREEN_HEIGHT);
 
     // preload font
     memcpy((void*)context->memory, (void*)font, sizeof font / sizeof font[0]);
@@ -78,7 +74,7 @@ int c8_tick(struct chip8 *context) {
         --context->soundTimer;
     }
 
-    opcode = c8_fetch(context);     printf("decode: %04x\n", opcode);
+    opcode = c8_fetch(context);     //printf("decode: %04x\n", opcode);
     c8_decode(context, opcode);
 
     if ((err = c8_get_error(context)).err != C8_GOOD) {
@@ -272,7 +268,6 @@ void c8_opcodeDXYN(struct chip8 *context, WORD opcode) {
 
     C8_OPCODE_SELECT_XYN(opcode);
 
-
     x = context->registers[X];
     y = context->registers[Y];
     addressI = context->addressI;
@@ -291,19 +286,18 @@ void c8_opcodeDXYN(struct chip8 *context, WORD opcode) {
             px = (x + col) % SCREEN_WIDTH;
             
             if (spritePixelRow & curPixel) {
+                int index = (py * SCREEN_WIDTH) + px;
+                assert(index < SCREEN_BUFFER_SIZE_IN_BITS);
+
                 // check collision
-                if (context->screenBuffer[px][py] == 1) {
+                if (context->screenBuffer[index] == 1) {
                     context->registers[VF] = 1;
                 }
 
-                context->screenBuffer[px][py] ^= 1;
+                context->screenBuffer[index] ^= 1;
             }
-
-            context->m_renderer->set_pixel(context->screenBuffer[px][py], px, py, context->m_renderer->userData);
         }
     }
-
-    context->m_renderer->render(context->m_renderer->userData);
 }
 
 void c8_opcodeFX07(struct chip8 *context, WORD opcode) {

@@ -6,6 +6,7 @@ extern "C" {
 #endif
 
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <time.h>
 
@@ -17,7 +18,7 @@ extern "C" {
 #define REGISTER_COUNT 16
 #define SCREEN_WIDTH 64
 #define SCREEN_HEIGHT 32
-#define SCREEN_BUFFER_SIZE_IN_BITS  ( SCREEN_WIDTH * SCREEN_HEIGHT )
+#define SCREEN_BUFFER_SIZE_IN_BITS  ( SCREEN_WIDTH * SCREEN_HEIGHT)
 #define SCREEN_BUFFER_SIZE_IN_BYTES ( SCREEN_BUFFER_SIZE_IN_BITS / 8 )
 
 typedef unsigned char BYTE;
@@ -41,13 +42,6 @@ typedef struct {
     char *msg;
 } c8_error_t;
 
-struct c8_renderer {
-    C8_PixelClearer clear;
-    C8_PixelRenderer render;
-    C8_PixelSetter set_pixel;
-    void **userData;
-};
-
 /**
  * @brief Chip8 context
 */
@@ -57,12 +51,11 @@ struct chip8 {
     WORD                  sp;                                            // stack pointer. 12 levels of nesting (0xEA0-0xEFF)
     WORD                  addressI;                                      // only 12 lowers bits used
     WORD                  pc;                                            // program counter
-    BYTE                  screenBuffer[SCREEN_WIDTH][SCREEN_HEIGHT];
+    BYTE                *screenBuffer;                                   // uint32 array in order to comply to SDL_Texture pixels array format
     BYTE                  delayTimer;                                    // Both timers count at 60hz until reaching 0
     BYTE                  soundTimer;
     int                   keyPressed;                                    // 0-F (-1 when depressed)
     c8_error_t            m_error;
-    struct c8_renderer   *m_renderer;
 };
 
 // font data
@@ -92,7 +85,7 @@ c8_error_t c8_get_error(struct chip8 *context);
 void       c8_set_error(struct chip8 *context, c8_error_t error);
 
 /* Setup */
-void c8_reset(struct chip8 *context, struct c8_renderer *renderer);
+void c8_reset(struct chip8 *context);
 void c8_destroy(struct chip8 *context);
 void c8_load_prgm(struct chip8 *context, FILE *fp);
 
