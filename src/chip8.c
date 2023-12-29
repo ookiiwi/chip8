@@ -24,7 +24,7 @@ void       c8_set_error(struct chip8 *context, c8_error_t error) { context->m_er
 
 /* Setup */
 
-void c8_reset(struct chip8 *context, C8_PixelRenderer renderer, void **rendererUserData) {
+void c8_reset(struct chip8 *context, struct c8_renderer *renderer) {
     context->memory         = (BYTE*)calloc(MEMORY_SIZE_IN_BYTES, sizeof(BYTE));
     context->registers      = (BYTE*)calloc(REGISTER_COUNT, sizeof(BYTE));
     context->sp             = USER_MEMORY_END + 1;
@@ -35,8 +35,8 @@ void c8_reset(struct chip8 *context, C8_PixelRenderer renderer, void **rendererU
     context->soundTimer     = 0;
     context->keyPressed     = -1;
     context->m_error        = (c8_error_t){ C8_GOOD, "" };
+
     context->m_renderer     = renderer;
-    context->m_renUserData  = rendererUserData;
 
     // set array to zeros
     memset((void*)context->screenBuffer, 0, SCREEN_WIDTH*SCREEN_HEIGHT);
@@ -67,6 +67,27 @@ void c8_load_prgm(struct chip8 *context, FILE *fp) {
 }
 
 /* Fetch-decode */
+
+int c8_tick(struct chip8 *context) {
+    WORD opcode;
+    c8_error_t err;
+
+    if (context->delayTimer) --context->delayTimer;
+    if (context->soundTimer) {
+        // TODO: beep
+        --context->soundTimer;
+    }
+
+    opcode = c8_fetch(context);     printf("decode: %04x\n", opcode);
+    c8_decode(context, opcode);
+
+    if ((err = c8_get_error(context)).err != C8_GOOD) {
+        fprintf(stderr, "c8_decode Error(%d): %s at %04x(%04x)\n", err.err, err.msg, context->pc, opcode);
+        return -1;
+    }
+
+    return 0;
+}
 
 WORD c8_fetch(struct chip8 *context) {
     WORD res;
@@ -245,6 +266,7 @@ void c8_opcodeCXNN(struct chip8 *context, WORD opcode) {
 
 void c8_opcodeDXYN(struct chip8 *context, WORD opcode) {
     int x, y;
+    int px, py;
     int addressI, bufIndex;
     BYTE spritePixelRow;
 
@@ -256,21 +278,20 @@ void c8_opcodeDXYN(struct chip8 *context, WORD opcode) {
     addressI = context->addressI;
 
     context->registers[VF] = 0; // reset VF
-    
+
     // loop through 8*N sprite
     for (int row  = 0; row < N; ++row) {
-        int px, py;
         assert(bufIndex < SCREEN_BUFFER_SIZE_IN_BYTES); // can be considered as scroll
 
         spritePixelRow = read_memory(context, context->addressI + row);   RETURN_ON_ERROR;
          
-        // check collision
-        py = y + row;
+        py = (y + row) % SCREEN_HEIGHT;
 
         for (int col = 0, curPixel = 0x80; col < 8; ++col, curPixel >>= 1) {
-            px = x + col;
+            px = (x + col) % SCREEN_WIDTH;
             
             if (spritePixelRow & curPixel) {
+                // check collision
                 if (context->screenBuffer[px][py] == 1) {
                     context->registers[VF] = 1;
                 }
@@ -278,9 +299,11 @@ void c8_opcodeDXYN(struct chip8 *context, WORD opcode) {
                 context->screenBuffer[px][py] ^= 1;
             }
 
-            context->m_renderer(context->screenBuffer[px][py], px, py, context->m_renUserData);
+            context->m_renderer->set_pixel(context->screenBuffer[px][py], px, py, context->m_renderer->userData);
         }
     }
+
+    context->m_renderer->render(context->m_renderer->userData);
 }
 
 void c8_opcodeFX07(struct chip8 *context, WORD opcode) {
