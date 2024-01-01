@@ -1,13 +1,20 @@
 #include "chip8.h"
+#include "c8_disassembler.h"
+#include "c8_def.h"
+#include "c8_profiler.hh"
 #include "cleanup.hh"
-
-#include <stdio.h>
-#include <assert.h>
+#include "imgui.h"
+#include "imgui_impl_sdl2.h"
+#include "imgui_impl_sdlrenderer2.h"
 #include <SDL.h>
+#include <stdio.h>
+#include <sstream>
+#include <cassert>
+#include <vector>
 
-#define PIXEL_SCALE 10
-#define WINDOW_WIDTH  SCREEN_WIDTH  * PIXEL_SCALE
-#define WINDOW_HEIGHT SCREEN_HEIGHT * PIXEL_SCALE
+#if !SDL_VERSION_ATLEAST(2,0,17)
+#error This backend requires SDL 2.0.17+ because of SDL_RenderGeometry() function
+#endif
 
 void copy_c8_screenBuffer(SDL_Texture *texture, struct chip8 *context) {
     void    *pixels;
@@ -26,7 +33,7 @@ void copy_c8_screenBuffer(SDL_Texture *texture, struct chip8 *context) {
 
             for(int i = 0; i < PIXEL_SCALE; ++i) {          // fill on x
                 for (int j = 0; j < PIXEL_SCALE; ++j)  {    // fill on y
-                    base = ((Uint8*)pixels) + (4 * ((y + j) * WINDOW_WIDTH + x + i));
+                    base = ((Uint8*)pixels) + (4 * ((y + j) * VIEWPORT_WIDTH + x + i));
                     base[0] = color;
                     base[1] = color;
                     base[2] = color;
@@ -55,32 +62,41 @@ int load_prgm(struct chip8 *context, int argc, char **argv) {
 }
 
 int main(int argc, char** argv) {
-    int bRunning;
+    int bRunning, c8ShouldTick;
     struct chip8 _context;
     struct chip8 *context;
-    WORD opcode;
+    int opcode;
     SDL_Window   *window;
     SDL_Renderer *renderer;
     SDL_Texture  *texture;
+    SDL_Rect      viewport;
     Uint64 prevTicks, ticks, delta;
+    C8_Profiler profiler(_context);
 
     /* init components */
     bRunning = 1;
     context = &_context;
 
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_GAMECONTROLLER) != 0) {
         printf("SDL_Init Error: %s\n", SDL_GetError());
         return 1;   
     }
 
-    window = SDL_CreateWindow("chip8", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_SHOWN);
+    // From 2.0.18: Enable native IME.
+#ifdef SDL_HINT_IME_SHOW_UI
+    SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
+#endif
+
+    // Create window with SDL_Renderer graphics context
+    SDL_WindowFlags windowFlags = (SDL_WindowFlags)(SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+    window = SDL_CreateWindow("chip8", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, WINDOW_WIDTH, WINDOW_HEIGHT, windowFlags);
     if (window == NULL) {
         printf("SDL_CreateWindow Error: %s\n", SDL_GetError());
         SDL_Quit();
         return 1;
     }
 
-    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
+    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (renderer == NULL) {
         cleanup(window);
         printf("SDL_CreateRenderer Error: %s\n", SDL_GetError());
@@ -88,7 +104,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, WINDOW_WIDTH, WINDOW_HEIGHT);
+    texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
     if (texture == NULL) {
         cleanup(renderer, window);
         printf("SDL_CreateTexture Error: %s\n", SDL_GetError());
@@ -105,12 +121,34 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Setup Dear ImGui context
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO(); (void)io;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
+
+    // Setup Dear ImGui style
+    ImGui::StyleColorsDark();
+
+    // Setup Platform/Renderer backends
+    ImGui_ImplSDL2_InitForSDLRenderer(window, renderer);
+    ImGui_ImplSDLRenderer2_Init(renderer);
+
+    viewport.x = 0;
+    viewport.y = 0;
+    viewport.w = VIEWPORT_WIDTH;
+    viewport.h = VIEWPORT_HEIGHT;
+    
     while(bRunning) {
         SDL_Event event;
         ticks = SDL_GetTicks64();
         delta = ticks - prevTicks;
+        c8ShouldTick = (delta > (1000/600.0)) && profiler.shouldStep();
 
         while(SDL_PollEvent(&event)) {
+            ImGui_ImplSDL2_ProcessEvent(&event);
+
             if( (SDL_QUIT == event.type) || 
                 (SDL_KEYDOWN == event.type && SDLK_ESCAPE == event.key.keysym.sym) ) {
                 bRunning = 0;
@@ -120,28 +158,45 @@ int main(int argc, char** argv) {
 
                 if (key >= 0x30 && key <= 0x39)                 // 0 to 9
                     context->keyPressed = key & 0x0F;
-                else if (key >= 0x60 && key <= 0x65)            // A to F
+                else if (key >= 0x60 && key <= 0x66)            // A to F
                     context->keyPressed = (key & 0x0F) + 0x9;
             } else if (SDL_KEYUP == event.type) {
                 context->keyPressed = -1;
             }
         }
 
-
-        if (delta > (1000/600.0)) {
-            if (c8_tick(context) != 0) {
+        if (c8ShouldTick) {
+            if ((opcode = c8_tick(context)) <= 0) {
+                bRunning = false;
                 break;
             }
 
             prevTicks = ticks;
         }
 
-        // As screenBuffer overrides texture pixels, no need to call SDL_RenderClear
-        copy_c8_screenBuffer(texture, context);
-        SDL_RenderCopy(renderer, texture, NULL, NULL);
-        SDL_RenderPresent(renderer);
+        // Start the Dear ImGui frame
+        ImGui_ImplSDLRenderer2_NewFrame();
+        ImGui_ImplSDL2_NewFrame();
+        ImGui::NewFrame();
 
+        profiler.render(c8ShouldTick ? &opcode : nullptr);
+
+        // Rendering
+        ImGui::Render();
+        SDL_RenderSetScale(renderer, io.DisplayFramebufferScale.x, io.DisplayFramebufferScale.y);
+        SDL_RenderClear(renderer);  // Needed as texture doesn't fill the renderer
+
+        copy_c8_screenBuffer(texture, context);
+        SDL_RenderCopy(renderer, texture, NULL, &viewport);
+
+        ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData());
+        SDL_RenderPresent(renderer);
     }
+
+    // Cleanup
+    ImGui_ImplSDLRenderer2_Shutdown();
+    ImGui_ImplSDL2_Shutdown();
+    ImGui::DestroyContext();
 
     cleanup(context, texture, renderer, window);
     SDL_Quit();
