@@ -269,18 +269,14 @@ void c8_opcodeFX0A(struct chip8 *context, WORD opcode) {
 }
 
 void c8_opcodeFX33(struct chip8 *context, WORD opcode) {
-    WORD i;
-    int res, rv;
+    int res;
 
     C8_OPCODE_SELECT_XNN(opcode);
 
-    i   = context->addressI;
     res = context->registers[X];
 
-    while(res) {
-        write_memory(context, i++, res % 10);  RETURN_ON_ERROR;
-        res /= 10;
-    }
+    BYTE bcd[] = { res/100, (res/10) % 10, res % 10 };
+    memcpy((void*)&context->memory[context->addressI], (void*)bcd, 3);
 }
 
 void c8_opcodeFX55(struct chip8 *context, WORD opcode) {
