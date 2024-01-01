@@ -130,7 +130,8 @@ int read_memory(struct chip8 *context, WORD address) {
 /* Instructions */
 
 void c8_opcode00E0(struct chip8 *context, WORD opcode) {
-    void* rv = memset((void*)context->screenBuffer, 0, SCREEN_BUFFER_SIZE_IN_BYTES);
+    void* rv = memset((void*)context->screenBuffer, 0, SCREEN_BUFFER_SIZE_IN_BITS);
+    context->registers[VF] = 0;
     if (rv == NULL) SET_ERROR(C8_CLEAR_SCREEN);
 }
 
@@ -214,7 +215,7 @@ void c8_opcodeCXNN(struct chip8 *context, WORD opcode) {
 void c8_opcodeDXYN(struct chip8 *context, WORD opcode) {
     int x, y;
     int px, py;
-    int addressI, bufIndex;
+    int addressI;
     BYTE spritePixelRow;
 
     C8_OPCODE_SELECT_XYN(opcode);
@@ -227,8 +228,6 @@ void c8_opcodeDXYN(struct chip8 *context, WORD opcode) {
 
     // loop through 8*N sprite
     for (int row  = 0; row < N; ++row) {
-        assert(bufIndex < SCREEN_BUFFER_SIZE_IN_BYTES); // can be considered as scroll
-
         spritePixelRow = read_memory(context, context->addressI + row);   RETURN_ON_ERROR;
          
         py = (y + row) % SCREEN_HEIGHT;
