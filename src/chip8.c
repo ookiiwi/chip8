@@ -1,4 +1,5 @@
 #include "chip8.h"
+#include "c8_decode.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -44,6 +45,7 @@ void c8_reset(struct chip8 *context) {
 void c8_destroy(struct chip8 *context) {
     free(context->memory);
     free(context->registers);
+    free(context->screenBuffer);
 }
 
 void c8_load_prgm(struct chip8 *context, FILE *fp) {
@@ -74,7 +76,7 @@ int c8_tick(struct chip8 *context) {
         --context->soundTimer;
     }
 
-    opcode = c8_fetch(context);     //printf("decode: %04x\n", opcode);
+    opcode = c8_fetch(context);
     c8_decode(context, opcode);
 
     if ((err = c8_get_error(context)).err != C8_GOOD) {
@@ -82,7 +84,7 @@ int c8_tick(struct chip8 *context) {
         return -1;
     }
 
-    return 0;
+    return opcode;
 }
 
 WORD c8_fetch(struct chip8 *context) {
@@ -95,68 +97,17 @@ WORD c8_fetch(struct chip8 *context) {
     return res;
 }
 
+C8_DECODE_FUNC_GEN(c8_decode_internal, struct chip8 *, c8_opcode)
+
 void c8_decode(struct chip8 *context, WORD opcode) {
-#define SET_INVALID_OPCODE_ERROR(s) SET_ERROR(C8_DECODE_INVALID_OPCODE, s);             
-    switch(C8_OPCODE_SELECT_OP(opcode)) {
-        case 0x0:
-            switch(opcode) {
-                case 0x00E0: c8_opcode00E0(context, opcode); break;
-                case 0x00EE: c8_opcode00EE(context, opcode); break;
-                default: SET_INVALID_OPCODE_ERROR("00EH"); return;
-            } 
+    #define SET_INVALID_OPCODE_ERROR(s) SET_ERROR(C8_DECODE_INVALID_OPCODE, s)
 
-            break;
-        case 0x1: c8_opcode1NNN(context, opcode); break;
-        case 0x2: c8_opcode2NNN(context, opcode); break;
-        case 0x3: c8_opcode3XNN(context, opcode); break;
-        case 0x4: c8_opcode4XNN(context, opcode); break;
-        case 0x5: c8_opcode5XY0(context, opcode); break;
-        case 0x6: c8_opcode6XNN(context, opcode); break;
-        case 0x7: c8_opcode7XNN(context, opcode); break;
-        case 0x8:
-            switch(C8_OPCODE_SELECT_N(opcode)) {
-                case 0x0: c8_opcode8XY0(context, opcode); break;
-                case 0x1: c8_opcode8XY1(context, opcode); break;
-                case 0x2: c8_opcode8XY2(context, opcode); break;
-                case 0x3: c8_opcode8XY3(context, opcode); break;
-                case 0x4: c8_opcode8XY4(context, opcode); break;
-                case 0x5: c8_opcode8XY5(context, opcode); break;
-                case 0x6: c8_opcode8XY6(context, opcode); break;
-                case 0x7: c8_opcode8XY7(context, opcode); break;
-                case 0xE: c8_opcode8XYE(context, opcode); break;
-                default: SET_INVALID_OPCODE_ERROR("8XYH"); return;
-            }
+    int rv = c8_decode_internal(context, opcode);
 
-            break;
-        case 0x9: c8_opcode9XY0(context, opcode); break;
-        case 0xA: c8_opcodeANNN(context, opcode); break;
-        case 0xB: c8_opcodeBNNN(context, opcode); break;
-        case 0xC: c8_opcodeCXNN(context, opcode); break;
-        case 0xD: c8_opcodeDXYN(context, opcode); break;
-        case 0xE: 
-            switch(C8_OPCODE_SELECT_NN(opcode)) {
-                case 0x9E: c8_opcodeEX9E(context, opcode); break;
-                case 0xA1: c8_opcodeEXA1(context, opcode); break;
-                default: SET_INVALID_OPCODE_ERROR("EXHH"); return;
-            }
-
-            break;
-        case 0xF: 
-            switch(C8_OPCODE_SELECT_NN(opcode)) {
-                case 0x07: c8_opcodeFX07(context, opcode); break;
-                case 0x0A: c8_opcodeFX0A(context, opcode); break;
-                case 0x15: c8_opcodeFX15(context, opcode); break;
-                case 0x18: c8_opcodeFX18(context, opcode); break;
-                case 0x1E: c8_opcodeFX1E(context, opcode); break;
-                case 0x29: c8_opcodeFX29(context, opcode); break;
-                case 0x33: c8_opcodeFX33(context, opcode); break;
-                case 0x55: c8_opcodeFX55(context, opcode); break;
-                case 0x65: c8_opcodeFX55(context, opcode); break;
-                default: SET_INVALID_OPCODE_ERROR("FXHH"); return;
-            }
-
-            break;
-        default: SET_INVALID_OPCODE_ERROR("HHHH"); return;
+    if(rv != 0) {
+        char s[5];
+        snprintf(s, 5, "%04x", rv);
+        SET_INVALID_OPCODE_ERROR(s);
     }
 }
 
@@ -324,11 +275,12 @@ void c8_opcodeFX33(struct chip8 *context, WORD opcode) {
     C8_OPCODE_SELECT_XNN(opcode);
 
     i   = context->addressI;
-    res = (context->registers[X] & 0x7);
+    res = context->registers[X];
 
-    write_memory(context, i,   (res >> 2) & 0x1);  RETURN_ON_ERROR;
-    write_memory(context, i+1, (res >> 1) & 0x1);  RETURN_ON_ERROR;
-    write_memory(context, i+2, res & 0x1);         RETURN_ON_ERROR;
+    while(res) {
+        write_memory(context, i++, res % 10);  RETURN_ON_ERROR;
+        res /= 10;
+    }
 }
 
 void c8_opcodeFX55(struct chip8 *context, WORD opcode) {
