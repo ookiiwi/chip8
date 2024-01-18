@@ -1,6 +1,7 @@
 #include "chip8.h"
 #include "c8_disassembler.h"
 #include "c8_def.h"
+#include "util.h"
 #include "c8_profiler.hh"
 #include "cleanup.hh"
 #include "imgui.h"
@@ -16,7 +17,7 @@
 #error This backend requires SDL 2.0.17+ because of SDL_RenderGeometry() function
 #endif
 
-void copy_c8_screenBuffer(SDL_Texture *texture, struct chip8 *context) {
+void copy_c8_screenBuffer(SDL_Texture *texture, chip8_t *context) {
     void    *pixels;
     int      pitch;
     Uint8   *base;
@@ -46,32 +47,52 @@ void copy_c8_screenBuffer(SDL_Texture *texture, struct chip8 *context) {
     SDL_UnlockTexture(texture);
 }
 
-int load_prgm(struct chip8 *context, int argc, char **argv) {
-    FILE *fp;
-    char *filename = argv[1];
+int load_prgm(chip8_t *context, int argc, char **argv) {
+    std::string dummy;
+    const char *prgmPath, *gamePath, *configPath;
 
-    fp = fopen(filename, "rb");
-    if (fp == NULL) {
-        return -1;
+    if (argc < 2) {
+        return 2;
     }
 
-    c8_load_prgm(context, fp);
-    fclose(fp);
+    prgmPath = argv[0];
+    gamePath = argv[1];
 
-    return 0;
+    if (argc >= 3) {
+        configPath = argv[2];
+    } else {
+        // TODO: handle any OS path
+        int i = last_index(gamePath, '/');
+
+        if (i > 0) {
+            dummy = std::string(gamePath, i+1) + "config.cfg";
+            configPath = dummy.c_str();
+        } else {
+            configPath = NULL;
+        }
+    }
+
+    int rv = c8_load_prgm(context, gamePath, configPath);
+    c8_error_t err = c8_get_error(context);
+
+    if (err.err == C8_LOAD_CANNOT_OPEN_CONFIG) {
+        fprintf(stderr, "Cannot open config: %s\n", configPath);
+    }
+
+    return rv;
 }
 
 int main(int argc, char** argv) {
-    int bRunning, c8ShouldTick;
-    struct chip8 _context;
-    struct chip8 *context;
-    int opcode;
-    SDL_Window   *window;
-    SDL_Renderer *renderer;
-    SDL_Texture  *texture;
-    SDL_Rect      viewport;
-    Uint64 prevTicks, ticks, delta;
-    C8_Profiler profiler(_context);
+    int              bRunning, c8ShouldTick;
+    chip8_t         _context;
+    chip8_t         *context;
+    int              opcode;
+    SDL_Window      *window;
+    SDL_Renderer    *renderer;
+    SDL_Texture     *texture;
+    SDL_Rect         viewport;
+    Uint64           prevTicks, ticks, delta;
+    C8_Profiler      profiler(_context);        // needs to be assigned here
 
     /* init components */
     bRunning = 1;
@@ -114,9 +135,9 @@ int main(int argc, char** argv) {
 
     c8_reset(context);
     int rv = load_prgm(context, argc, argv);
-    if (rv != 0 ) {
+    if (rv != 0) {
         cleanup(context, texture, renderer, window);
-        printf("load_prgm Error\n");
+        fprintf(stderr, "load_prgm Error: %d\n", rv);
         SDL_Quit();
         return 1;
     }
@@ -139,7 +160,9 @@ int main(int argc, char** argv) {
     viewport.y = 0;
     viewport.w = VIEWPORT_WIDTH;
     viewport.h = VIEWPORT_HEIGHT;
-    
+
+    c8_clr_error(context);
+
     while(bRunning) {
         SDL_Event event;
         ticks = SDL_GetTicks64();
