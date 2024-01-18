@@ -5,7 +5,7 @@
 
 #define MAX_OPCODE_SNAPSHOTS_COUNT 512
 
-_C8_OpcodeSnapshot::_C8_OpcodeSnapshot(const struct chip8 &context) 
+_C8_OpcodeSnapshot::_C8_OpcodeSnapshot(const chip8_t &context) 
     :   registers(context.registers, &context.registers[15]),
         pc(context.pc-2),
         sp(context.sp),
