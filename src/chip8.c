@@ -1,9 +1,11 @@
 #include "chip8.h"
 #include "c8_decode.h"
+#include "util.h"
 
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
+#include "ini.h"
 
 #define SET_ERROR_1(err)      c8_set_error(context, (c8_error_t){err, ""})
 #define SET_ERROR_2(err, msg) c8_set_error(context, (c8_error_t){err, msg})
@@ -20,12 +22,13 @@
 #define DECREMENENT_PC  context->pc -= 2
 
 /* Error handling */
-c8_error_t c8_get_error(struct chip8 *context) { return context->m_error; }
-void       c8_set_error(struct chip8 *context, c8_error_t error) { context->m_error = error; }
+c8_error_t c8_get_error(chip8_t *context) { return context->m_error; }
+void       c8_set_error(chip8_t *context, c8_error_t error) { context->m_error = error; }
+void       c8_clr_error(chip8_t *context) { c8_set_error(context, (c8_error_t){ C8_GOOD, "" }); }
 
 /* Setup */
 
-void c8_reset(struct chip8 *context) {
+void c8_reset(chip8_t *context) {
     context->memory         = (BYTE*)calloc(MEMORY_SIZE_IN_BYTES, sizeof(BYTE));
     context->registers      = (BYTE*)calloc(REGISTER_COUNT, sizeof(BYTE));
     context->screenBuffer   = (BYTE*)calloc(SCREEN_BUFFER_SIZE_IN_BITS, sizeof(BYTE));
@@ -37,19 +40,44 @@ void c8_reset(struct chip8 *context) {
     context->soundTimer     = 0;
     context->keyPressed     = -1;
     context->m_error        = (c8_error_t){ C8_GOOD, "" };
+    context->config         = (c8_config_t){ "", 1, 60.f };
 
     // preload font
     memcpy((void*)context->memory, (void*)font, sizeof font / sizeof font[0]);
 }
 
-void c8_destroy(struct chip8 *context) {
+void c8_destroy(chip8_t *context) {
     free(context->memory);
     free(context->registers);
     free(context->screenBuffer);
 }
 
-void c8_load_prgm(struct chip8 *context, FILE *fp) {
+static int config_handler(void *user, const char *section, const char *name, const char *value) {
+    c8_config_t *config = (c8_config_t*)user;
+
+    if (strcmp(section, config->name) == 0) {
+        if (strcmp(name, "wrapY") == 0) {
+            config->wrapY = atoi(value);
+        } else if (strcmp(name, "frameRate") == 0) {
+            config->frameRate = atof(value);
+        } else {
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+int c8_load_prgm(chip8_t *context, const char *path, const char *configPath) {
+    FILE *fp;
     size_t sz;
+    int filenameStart;
+
+    fp = fopen(path, "rb");
+    if (fp == NULL) {
+        SET_ERROR(C8_LOAD_CANNOT_OPEN_FILE);
+        return -1;
+    }
     
     fseek(fp, 0L, SEEK_END);
     sz = ftell(fp);
@@ -57,16 +85,30 @@ void c8_load_prgm(struct chip8 *context, FILE *fp) {
 
     if (sz > USER_MEMORY_SIZE_IN_BYTES) {
         SET_ERROR(C8_LOAD_MEMORY_BUFFER_TOO_LARGE);
-        return;
+        fclose(fp);
+        return -1;
     }
 
     memset((void*)(context->memory + USER_MEMORY_START), 0, USER_MEMORY_SIZE_IN_BYTES);
     fread((void*)(context->memory + USER_MEMORY_START), sz, 1, fp);
+    
+    fclose(fp);
+
+    if (configPath != NULL && (filenameStart = last_index(path, '/')) >= 0 && filenameStart < strlen(path)) {
+        strcpy(context->config.name, (path + filenameStart + 1));
+
+        // load config
+        if (ini_parse(configPath, config_handler, &(context->config)) < 0) {
+            SET_ERROR(C8_LOAD_CANNOT_OPEN_CONFIG);  // Non-fatal error
+        }
+    }
+
+    return 0;
 }
 
 /* Fetch-decode */
 
-int c8_tick(struct chip8 *context) {
+int c8_tick(chip8_t *context) {
     WORD opcode;
     c8_error_t err;
 
@@ -87,7 +129,7 @@ int c8_tick(struct chip8 *context) {
     return opcode;
 }
 
-WORD c8_fetch(struct chip8 *context) {
+WORD c8_fetch(chip8_t *context) {
     WORD res;
 
     res  = (context->memory[context->pc] << 8);
@@ -97,9 +139,9 @@ WORD c8_fetch(struct chip8 *context) {
     return res;
 }
 
-C8_DECODE_FUNC_GEN(c8_decode_internal, struct chip8 *, c8_opcode)
+C8_DECODE_FUNC_GEN(c8_decode_internal, chip8_t*, c8_opcode)
 
-void c8_decode(struct chip8 *context, WORD opcode) {
+void c8_decode(chip8_t *context, WORD opcode) {
     #define SET_INVALID_OPCODE_ERROR(s) SET_ERROR(C8_DECODE_INVALID_OPCODE, s)
 
     int rv = c8_decode_internal(context, opcode);
@@ -115,13 +157,13 @@ void c8_decode(struct chip8 *context, WORD opcode) {
 #define CHECK_AUTHORIZED_MEM_ACCESS(address, msg, res) \
     if (address > USER_MEMORY_END) { SET_ERROR(C8_REFUSED_MEM_ACCESS, msg); return res; }
 
-void write_memory(struct chip8 *context, WORD address, BYTE data) {
+void write_memory(chip8_t *context, WORD address, BYTE data) {
     CHECK_AUTHORIZED_MEM_ACCESS(address, "Error accessing memory", );
 
     context->memory[address] = data;
 }
 
-int read_memory(struct chip8 *context, WORD address) {
+int read_memory(chip8_t *context, WORD address) {
     CHECK_AUTHORIZED_MEM_ACCESS(address, "Error reading memory", 0)
     
     return context->memory[address];
@@ -129,13 +171,13 @@ int read_memory(struct chip8 *context, WORD address) {
 
 /* Instructions */
 
-void c8_opcode00E0(struct chip8 *context, WORD opcode) {
+void c8_opcode00E0(chip8_t *context, WORD opcode) {
     void* rv = memset((void*)context->screenBuffer, 0, SCREEN_BUFFER_SIZE_IN_BITS);
     context->registers[VF] = 0;
     if (rv == NULL) SET_ERROR(C8_CLEAR_SCREEN);
 }
 
-void c8_opcode00EE(struct chip8 *context, WORD opcode) {
+void c8_opcode00EE(chip8_t *context, WORD opcode) {
     // Error: Stackunderflow
     if (context->sp == 0xEA0) SET_ERROR(C8_STACKUNDERFLOW);
 
@@ -143,14 +185,14 @@ void c8_opcode00EE(struct chip8 *context, WORD opcode) {
     context->pc |= (context->memory[--context->sp] << 8);   // get upper nibble
 }
 
-void c8_opcode1NNN(struct chip8 *context, WORD opcode) {
+void c8_opcode1NNN(chip8_t *context, WORD opcode) {
     int nnn = C8_OPCODE_SELECT_NNN(opcode);
 
     CHECK_AUTHORIZED_MEM_ACCESS(nnn, "Error in 1NNN",)
     context->pc = nnn;
 }
 
-void c8_opcode2NNN(struct chip8 *context, WORD opcode) {
+void c8_opcode2NNN(chip8_t *context, WORD opcode) {
     // Error: Stackoverflow
     if (context->sp >= 0xEFF) {
         SET_ERROR(C8_STACKOVERFLOW);
@@ -162,7 +204,7 @@ void c8_opcode2NNN(struct chip8 *context, WORD opcode) {
     context->pc = C8_OPCODE_SELECT_NNN(opcode);
 }
 
-void c8_opcode8XY4(struct chip8 *context, WORD opcode) {
+void c8_opcode8XY4(chip8_t *context, WORD opcode) {
     int res;
     
     C8_OPCODE_SELECT_XYN(opcode);
@@ -173,21 +215,21 @@ void c8_opcode8XY4(struct chip8 *context, WORD opcode) {
 }
 
 
-void c8_opcode8XY6(struct chip8 *context, WORD opcode) {
+void c8_opcode8XY6(chip8_t *context, WORD opcode) {
     C8_OPCODE_SELECT_XYN(opcode);
 
     context->registers[VF] = (context->registers[X] & 0x1); // get LSB
     context->registers[X] >>= 1;
 }
 
-void c8_opcode8XYE(struct chip8 *context, WORD opcode) {
+void c8_opcode8XYE(chip8_t *context, WORD opcode) {
     C8_OPCODE_SELECT_XYN(opcode);
 
     context->registers[VF] = (context->registers[X] & 0x80) >> 7; // get MSB
     context->registers[X] <<= 1;
 }
 
-void c8_opcodeANNN(struct chip8 *context, WORD opcode) {
+void c8_opcodeANNN(chip8_t *context, WORD opcode) {
     WORD nnn = C8_OPCODE_SELECT_NNN(opcode);
 
     CHECK_AUTHORIZED_MEM_ACCESS(nnn, "Error in ANNN",);
@@ -195,7 +237,7 @@ void c8_opcodeANNN(struct chip8 *context, WORD opcode) {
     context->addressI = nnn;
 }
 
-void c8_opcodeBNNN(struct chip8 *context, WORD opcode) {
+void c8_opcodeBNNN(chip8_t *context, WORD opcode) {
     WORD nnn;
 
     nnn  = C8_OPCODE_SELECT_NNN(opcode);
@@ -206,13 +248,13 @@ void c8_opcodeBNNN(struct chip8 *context, WORD opcode) {
     context->pc = nnn;
 }
 
-void c8_opcodeCXNN(struct chip8 *context, WORD opcode) {
+void c8_opcodeCXNN(chip8_t *context, WORD opcode) {
     C8_OPCODE_SELECT_XNN(opcode);
 
     context->registers[X] = (rand() & NN);
 }
 
-void c8_opcodeDXYN(struct chip8 *context, WORD opcode) {
+void c8_opcodeDXYN(chip8_t *context, WORD opcode) {
     int x, y;
     int px, py;
     int addressI;
@@ -227,10 +269,16 @@ void c8_opcodeDXYN(struct chip8 *context, WORD opcode) {
     context->registers[VF] = 0; // reset VF
 
     // loop through 8*N sprite
-    for (int row  = 0; row < N; ++row) {
+    for (int row = 0; row < N; ++row) {
         spritePixelRow = read_memory(context, context->addressI + row);   RETURN_ON_ERROR;
          
-        py = (y + row) % SCREEN_HEIGHT;
+        py = (y + row);
+        
+        if (context->config.wrapY) {
+            py %= SCREEN_HEIGHT;
+        } else if (py >= SCREEN_HEIGHT) {
+            break;
+        }
 
         for (int col = 0, curPixel = 0x80; col < 8; ++col, curPixel >>= 1) {
             px = (x + col) % SCREEN_WIDTH;
@@ -250,13 +298,13 @@ void c8_opcodeDXYN(struct chip8 *context, WORD opcode) {
     }
 }
 
-void c8_opcodeFX07(struct chip8 *context, WORD opcode) {
+void c8_opcodeFX07(chip8_t *context, WORD opcode) {
     C8_OPCODE_SELECT_XNN(opcode);
     
     context->registers[X] = context->delayTimer;
 }
 
-void c8_opcodeFX0A(struct chip8 *context, WORD opcode) {
+void c8_opcodeFX0A(chip8_t *context, WORD opcode) {
     C8_OPCODE_SELECT_XNN(opcode);
 
     DECREMENENT_PC; // lock pc
@@ -267,7 +315,7 @@ void c8_opcodeFX0A(struct chip8 *context, WORD opcode) {
     }
 }
 
-void c8_opcodeFX33(struct chip8 *context, WORD opcode) {
+void c8_opcodeFX33(chip8_t *context, WORD opcode) {
     int res;
 
     C8_OPCODE_SELECT_XNN(opcode);
@@ -278,7 +326,7 @@ void c8_opcodeFX33(struct chip8 *context, WORD opcode) {
     memcpy((void*)&context->memory[context->addressI], (void*)bcd, 3);
 }
 
-void c8_opcodeFX55(struct chip8 *context, WORD opcode) {
+void c8_opcodeFX55(chip8_t *context, WORD opcode) {
     WORD addressI = context->addressI;
 
     C8_OPCODE_SELECT_XNN(opcode);
@@ -291,7 +339,7 @@ void c8_opcodeFX55(struct chip8 *context, WORD opcode) {
     }
 }
 
-void c8_opcodeFX65(struct chip8 *context, WORD opcode) {
+void c8_opcodeFX65(chip8_t *context, WORD opcode) {
     WORD addressI = context->addressI;
 
     C8_OPCODE_SELECT_XNN(opcode);
