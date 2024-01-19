@@ -33,14 +33,17 @@ void c8_reset(chip8_t *context) {
     context->registers      = (BYTE*)calloc(REGISTER_COUNT, sizeof(BYTE));
     context->screenBuffer   = (BYTE*)calloc(SCREEN_BUFFER_SIZE_IN_BITS, sizeof(BYTE));
     context->sp             = USER_MEMORY_END + 1;
-    context->addressI       = 0;
     context->pc             = USER_MEMORY_START;
-    context->addressI       = USER_MEMORY_START;
+    context->addressI       = 0;
     context->delayTimer     = 0;
     context->soundTimer     = 0;
-    context->keyPressed     = -1;
     context->m_error        = (c8_error_t){ C8_GOOD, "" };
-    context->config         = (c8_config_t){ "", 1, 60.f };
+    context->config         = (c8_config_t){ "", DEFAULT_WRAPY, DEFAULT_CLOCKSPEED, DEFAULT_FPS };
+    context->m_on_set_key   = NULL;
+    context->isRunning      = 1;
+
+    // preset keys to 0
+    memset(context->m_keys, 0, sizeof context->m_keys);
 
     // preload font
     memcpy((void*)context->memory, (void*)font, sizeof font / sizeof font[0]);
@@ -58,8 +61,10 @@ static int config_handler(void *user, const char *section, const char *name, con
     if (strcmp(section, config->name) == 0) {
         if (strcmp(name, "wrapY") == 0) {
             config->wrapY = atoi(value);
-        } else if (strcmp(name, "frameRate") == 0) {
-            config->frameRate = atof(value);
+        } else if (strcmp(name, "clockspeed") == 0) {
+            config->clockspeed = atof(value);
+        } else if (strcmp(name, "fps") == 0) {
+            config->fps = atof(value);
         } else {
             return -1;
         }
@@ -112,10 +117,8 @@ int c8_tick(chip8_t *context) {
     WORD opcode;
     c8_error_t err;
 
-    if (context->delayTimer) --context->delayTimer;
-    if (context->soundTimer) {
-        // TODO: beep
-        --context->soundTimer;
+    if (!context->isRunning) {
+        return context->lastOpcode;
     }
 
     opcode = c8_fetch(context);
@@ -126,7 +129,16 @@ int c8_tick(chip8_t *context) {
         return -1;
     }
 
+    context->lastOpcode = opcode;
     return opcode;
+}
+
+void c8_updateTimers(chip8_t *context) {
+    if (context->delayTimer) --context->delayTimer;
+    if (context->soundTimer) {
+        // TODO: beep
+        --context->soundTimer;
+    }
 }
 
 WORD c8_fetch(chip8_t *context) {
@@ -169,11 +181,22 @@ int read_memory(chip8_t *context, WORD address) {
     return context->memory[address];
 }
 
+/* Key handling */
+void c8_set_key(chip8_t *context, int key)   { 
+    context->m_keys[key] = 1; 
+
+    if (context->m_on_set_key != NULL) {
+        context->m_on_set_key(context, key);
+    }
+}
+
+void c8_unset_key(chip8_t *context, int key) { context->m_keys[key] = 0; }
+
 /* Instructions */
 
 void c8_opcode00E0(chip8_t *context, WORD opcode) {
     void* rv = memset((void*)context->screenBuffer, 0, SCREEN_BUFFER_SIZE_IN_BITS);
-    context->registers[VF] = 0;
+    VF = 0;
     if (rv == NULL) SET_ERROR(C8_CLEAR_SCREEN);
 }
 
@@ -209,24 +232,24 @@ void c8_opcode8XY4(chip8_t *context, WORD opcode) {
     
     C8_OPCODE_SELECT_XYN(opcode);
 
-    res = context->registers[X] + context->registers[Y];
-    context->registers[X] = res;                        // implicitly truncated to 8 bits
-    context->registers[VF] = (res & 0x100) >> 8;        // carry flag if 9nth bit set
+    res = VX + VY;
+    VX = res;                        // implicitly truncated to 8 bits
+    VF = (res & 0x100) >> 8;        // carry flag if 9nth bit set
 }
 
 
 void c8_opcode8XY6(chip8_t *context, WORD opcode) {
     C8_OPCODE_SELECT_XYN(opcode);
 
-    context->registers[VF] = (context->registers[X] & 0x1); // get LSB
-    context->registers[X] >>= 1;
+    VF = (VX & 0x1); // get LSB
+    VX >>= 1;
 }
 
 void c8_opcode8XYE(chip8_t *context, WORD opcode) {
     C8_OPCODE_SELECT_XYN(opcode);
 
-    context->registers[VF] = (context->registers[X] & 0x80) >> 7; // get MSB
-    context->registers[X] <<= 1;
+    VF = (VX & 0x80) >> 7; // get MSB
+    VX <<= 1;
 }
 
 void c8_opcodeANNN(chip8_t *context, WORD opcode) {
@@ -251,7 +274,7 @@ void c8_opcodeBNNN(chip8_t *context, WORD opcode) {
 void c8_opcodeCXNN(chip8_t *context, WORD opcode) {
     C8_OPCODE_SELECT_XNN(opcode);
 
-    context->registers[X] = (rand() & NN);
+    VX = (rand() & NN);
 }
 
 void c8_opcodeDXYN(chip8_t *context, WORD opcode) {
@@ -262,11 +285,11 @@ void c8_opcodeDXYN(chip8_t *context, WORD opcode) {
 
     C8_OPCODE_SELECT_XYN(opcode);
 
-    x = context->registers[X];
-    y = context->registers[Y];
+    x = VX;
+    y = VY;
     addressI = context->addressI;
 
-    context->registers[VF] = 0; // reset VF
+    VF = 0; // reset VF
 
     // loop through 8*N sprite
     for (int row = 0; row < N; ++row) {
@@ -289,7 +312,7 @@ void c8_opcodeDXYN(chip8_t *context, WORD opcode) {
 
                 // check collision
                 if (context->screenBuffer[index] == 1) {
-                    context->registers[VF] = 1;
+                    VF = 1;
                 }
 
                 context->screenBuffer[index] ^= 1;
@@ -301,18 +324,20 @@ void c8_opcodeDXYN(chip8_t *context, WORD opcode) {
 void c8_opcodeFX07(chip8_t *context, WORD opcode) {
     C8_OPCODE_SELECT_XNN(opcode);
     
-    context->registers[X] = context->delayTimer;
+    VX = context->delayTimer;
+}
+
+void wait_for_key(chip8_t *context, int key) {
+    C8_OPCODE_SELECT_XNN(context->lastOpcode);
+
+    context->isRunning = 1;
+    VX = key;
+    context->m_on_set_key = NULL;
 }
 
 void c8_opcodeFX0A(chip8_t *context, WORD opcode) {
-    C8_OPCODE_SELECT_XNN(opcode);
-
-    DECREMENENT_PC; // lock pc
-
-    if(context->keyPressed != -1) {
-        context->registers[X] = context->keyPressed;
-        INCREMENENT_PC;  // unlock pc
-    }
+    context->isRunning = 0;
+    context->m_on_set_key = wait_for_key;
 }
 
 void c8_opcodeFX33(chip8_t *context, WORD opcode) {
@@ -320,7 +345,7 @@ void c8_opcodeFX33(chip8_t *context, WORD opcode) {
 
     C8_OPCODE_SELECT_XNN(opcode);
 
-    res = context->registers[X];
+    res = VX;
 
     BYTE bcd[] = { res/100, (res/10) % 10, res % 10 };
     memcpy((void*)&context->memory[context->addressI], (void*)bcd, 3);
