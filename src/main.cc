@@ -17,6 +17,24 @@
 #error This backend requires SDL 2.0.17+ because of SDL_RenderGeometry() function
 #endif
 
+#define TICK_COND(ticks, prevTicks, speed, cond, statement) do {        \
+    Uint64 delta = ticks - prevTicks;                                   \
+    if ((delta > (1000/speed)) && cond) {                               \
+        statement                                                       \
+        prevTicks = ticks;                                              \
+    }                                                                   \
+} while (0);
+
+#define TICK(ticks, prevTicks, speed, statement) TICK_COND(ticks, prevTicks, speed, 1, statement)
+
+#define SET_KEY(keyword) do {                                       \
+    int key = event.key.keysym.sym;                                 \
+    if (key >= 0x30 && key <= 0x39)                 /* 0 to 9 */    \
+        c8_##keyword##_key(context, key & 0x0F);                    \
+    else if (key >= 0x60 && key <= 0x66)            /* A to F */    \
+        c8_##keyword##_key(context, (key & 0x0F) + 0x9);            \
+} while(0);
+
 void copy_c8_screenBuffer(SDL_Texture *texture, chip8_t *context) {
     void    *pixels;
     int      pitch;
@@ -83,7 +101,7 @@ int load_prgm(chip8_t *context, int argc, char **argv) {
 }
 
 int main(int argc, char** argv) {
-    int              bRunning, c8ShouldTick;
+    bool             bRunning;
     chip8_t         _context;
     chip8_t         *context;
     int              opcode;
@@ -91,12 +109,18 @@ int main(int argc, char** argv) {
     SDL_Renderer    *renderer;
     SDL_Texture     *texture;
     SDL_Rect         viewport;
-    Uint64           prevTicks, ticks, delta;
+    bool             c8ShouldStep;
+    Uint64           ticks, prevTicks, prevDraws, prevTimersTicks;
     C8_Profiler      profiler(_context);        // needs to be assigned here
 
     /* init components */
     bRunning = 1;
     context = &_context;
+    ticks = 0;
+    prevTicks = 0;
+    prevDraws = 0;
+    prevTimersTicks = 0;
+    c8ShouldStep = true;
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_GAMECONTROLLER) != 0) {
         printf("SDL_Init Error: %s\n", SDL_GetError());
@@ -117,7 +141,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     if (renderer == NULL) {
         cleanup(window);
         printf("SDL_CreateRenderer Error: %s\n", SDL_GetError());
@@ -166,43 +190,41 @@ int main(int argc, char** argv) {
     while(bRunning) {
         SDL_Event event;
         ticks = SDL_GetTicks64();
-        delta = ticks - prevTicks;
-        c8ShouldTick = (delta > (1000/600.0)) && profiler.shouldStep();
+        c8ShouldStep = profiler.shouldStep();
 
         while(SDL_PollEvent(&event)) {
             ImGui_ImplSDL2_ProcessEvent(&event);
 
             if( (SDL_QUIT == event.type) || 
                 (SDL_KEYDOWN == event.type && SDLK_ESCAPE == event.key.keysym.sym) ) {
-                bRunning = 0;
-                break;
-            } else if (SDL_KEYDOWN == event.type) {
-                int key = event.key.keysym.sym;
-
-                if (key >= 0x30 && key <= 0x39)                 // 0 to 9
-                    context->keyPressed = key & 0x0F;
-                else if (key >= 0x60 && key <= 0x66)            // A to F
-                    context->keyPressed = (key & 0x0F) + 0x9;
-            } else if (SDL_KEYUP == event.type) {
-                context->keyPressed = -1;
-            }
-        }
-
-        if (c8ShouldTick) {
-            if ((opcode = c8_tick(context)) <= 0) {
                 bRunning = false;
                 break;
+            } else if (SDL_KEYDOWN == event.type) {
+                SET_KEY(set);
+            } else if (SDL_KEYUP == event.type) {
+                SET_KEY(unset);
             }
-
-            prevTicks = ticks;
         }
 
+TICK_COND(ticks, prevTicks, context->config.clockspeed, c8ShouldStep,
+        if ((opcode = c8_tick(context)) <= 0) {
+            bRunning = false;
+            break;
+        }
+);
+
+// Timers clocked at 60hz    
+TICK_COND(ticks, prevTimersTicks, 60.0, c8ShouldStep,
+            c8_updateTimers(context);
+);
+
+TICK(ticks, prevDraws, context->config.fps,
         // Start the Dear ImGui frame
         ImGui_ImplSDLRenderer2_NewFrame();
         ImGui_ImplSDL2_NewFrame();
         ImGui::NewFrame();
 
-        profiler.render(c8ShouldTick ? &opcode : nullptr);
+        profiler.render(c8ShouldStep ? &opcode : nullptr);
 
         // Rendering
         ImGui::Render();
@@ -214,6 +236,7 @@ int main(int argc, char** argv) {
 
         ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData());
         SDL_RenderPresent(renderer);
+);
     }
 
     // Cleanup
