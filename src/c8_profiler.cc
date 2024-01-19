@@ -14,8 +14,8 @@ _C8_OpcodeSnapshot::_C8_OpcodeSnapshot(const chip8_t &context)
         st(context.soundTimer) {}
 
 void C8_Profiler::render(const int *opcode) {
-    static int selected_index = 0;
-    _C8_OpcodeSnapshot context = (m_opSnapshots.size() != 0 ? m_opSnapshots.at(selected_index) : _C8_OpcodeSnapshot(m_context));
+    static int selected_index = -1;
+    _C8_OpcodeSnapshot context = (m_opSnapshots.size() != 0 && selected_index != -1 ? m_opSnapshots.at(selected_index) : _C8_OpcodeSnapshot(m_context));
 
     ImVec2 dummy(0, 10);
     ImGui::SetNextWindowPos(ImVec2(0, VIEWPORT_HEIGHT));
