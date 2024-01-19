@@ -11,7 +11,6 @@ extern "C" {
 #include <time.h>
 #include "c8_helper.h"
 
-#define VF (BYTE)0xF
 #define MEMORY_SIZE_IN_BYTES 0xFFF
 #define USER_MEMORY_START 0x200
 #define USER_MEMORY_END   0xE9F
@@ -22,9 +21,12 @@ extern "C" {
 #define SCREEN_BUFFER_SIZE_IN_BITS  ( SCREEN_WIDTH * SCREEN_HEIGHT)
 #define SCREEN_BUFFER_SIZE_IN_BYTES ( SCREEN_BUFFER_SIZE_IN_BITS / 8 )
 
-typedef void (*C8_PixelSetter)(int pixel, int x, int y, void **userData);
-typedef void (*C8_PixelClearer)(void **userData);
-typedef void (*C8_PixelRenderer)(void **userData);
+#define DEFAULT_CLOCKSPEED 800.0
+#define DEFAULT_FPS 60.0
+#define DEFAULT_WRAPY 1
+
+typedef struct chip8 chip8_t;
+typedef void (*C8_KeyChangeNotifier)(chip8_t*, int);
 
 typedef enum {
     C8_GOOD,
@@ -46,13 +48,14 @@ typedef struct {
 typedef struct {
     char     name[63];
     int      wrapY;
-    float    frameRate;
+    float    clockspeed;
+    float    fps;
 } c8_config_t;
 
 /**
  * @brief Chip8 context
 */
-typedef struct {
+struct chip8 {
     BYTE                 *memory;                                        // 4KiB memory
     BYTE                 *registers;                                     // 8-bit registers V0 to VF
     WORD                  sp;                                            // stack pointer. 12 levels of nesting (0xEA0-0xEFF)
@@ -61,10 +64,13 @@ typedef struct {
     BYTE                 *screenBuffer;                                  // uint32 array in order to comply to SDL_Texture pixels array format
     BYTE                  delayTimer;                                    // Both timers count at 60hz until reaching 0
     BYTE                  soundTimer;
-    int                   keyPressed;                                    // 0-F (-1 when depressed)
     c8_error_t            m_error;
     c8_config_t           config;
-} chip8_t;
+    int                   m_keys[16];
+    C8_KeyChangeNotifier  m_on_set_key;
+    int                   isRunning;
+    WORD                  lastOpcode;
+};
 
 // font data
 #define FONT_WIDTH 4
@@ -88,6 +94,11 @@ static const BYTE font[] = {
     0xF0, 0x80, 0xF0, 0x80, 0x80,
 };
 
+/* Macro shortcuts to access registers */
+#define VX (context->registers[X])
+#define VY (context->registers[Y])
+#define VF (context->registers[0xF])
+
 /* Error handling */
 c8_error_t c8_get_error(chip8_t *context);
 void       c8_set_error(chip8_t *context, c8_error_t error);
@@ -99,7 +110,8 @@ void c8_destroy(chip8_t *context);
 int  c8_load_prgm(chip8_t *context, const char *path, const char *configPath);
 
 /* Fetch-decode */
-int  c8_tick(chip8_t *context);     // Return opcode on success
+int  c8_tick(chip8_t *context);                 // Return opcode on success
+void c8_updateTimers(chip8_t *context);
 WORD c8_fetch(chip8_t *context);
 void c8_decode(chip8_t *context, WORD opcode);
 
@@ -107,15 +119,20 @@ void c8_decode(chip8_t *context, WORD opcode);
 void write_memory(chip8_t *context, WORD address, BYTE data);
 int  read_memory(chip8_t *context, WORD address);
 
-#define _C8_SKIP_IF_CMP_TO_X(field, eqPrefix, rhs) do {                                         \
+/* Key handling */
+void c8_set_key(chip8_t *context, int key);
+void c8_unset_key(chip8_t *context, int key);
+
+#define _C8_SKIP_IF_X(field, cond) do {                                                         \
     C8_OPCODE_SELECT_X##field(opcode);                                                          \
-    if ((context)->registers[X] eqPrefix##= rhs) {                                              \
+    if ( cond ) {                                                                               \
         (context)->pc += 2;                                                                     \
     }                                                                                           \
-} while(0)
+} while(0);
 
+#define _C8_SKIP_IF_CMP_TO_X(field, eqPrefix, rhs) _C8_SKIP_IF_X(field, (VX eqPrefix##= rhs))
 #define _C8_SKIP_IF_CMP_XNN(eqPrefix) _C8_SKIP_IF_CMP_TO_X(NN, eqPrefix, NN)
-#define _C8_SKIP_IF_CMP_XYN(eqPrefix) _C8_SKIP_IF_CMP_TO_X(YN, eqPrefix, (context)->registers[Y])
+#define _C8_SKIP_IF_CMP_XYN(eqPrefix) _C8_SKIP_IF_CMP_TO_X(YN, eqPrefix, VY)
 
 #define _C8_SET_VX(field, rhs, assignPrefix) do {                                               \
     C8_OPCODE_SELECT_X##field(opcode);                                                          \
@@ -123,7 +140,7 @@ int  read_memory(chip8_t *context, WORD address);
 } while(0)
 
 #define _C8_SET_VX_WITH_NN(assignPrefix) _C8_SET_VX(NN, NN, assignPrefix)
-#define _C8_SET_VX_WITH_Y(assignPrefix)  _C8_SET_VX(YN, (context)->registers[Y], assignPrefix)
+#define _C8_SET_VX_WITH_Y(assignPrefix)  _C8_SET_VX(YN, VY, assignPrefix)
 
 #define _C8_SUB_BORROW(regNum1, regNum2) do {                                                   \
     int res, noBorrow, a, b;                                                                    \
@@ -132,8 +149,8 @@ int  read_memory(chip8_t *context, WORD address);
     b = (context)->registers[regNum2];                                                          \
     res = a - b;                                                                                \
     noBorrow = (res >= 0);                                                                      \
-    (context)->registers[X]  = noBorrow ? res : -res; /* implicitly truncate to 8 bits */       \
-    (context)->registers[VF] = noBorrow;              /* no borrow flag */                      \
+    VX  = noBorrow ? res : -res; /* implicitly truncate to 8 bits */                            \
+    VF = noBorrow;              /* no borrow flag */                                            \
 } while(0)
 
 // Select X<field> from opcode and process <lhs> <pref>= <rhs>
@@ -187,9 +204,9 @@ void c8_opcodeCXNN(chip8_t *context, WORD opcode);    // Assign (rand number AND
 void c8_opcodeDXYN(chip8_t *context, WORD opcode);    // Draw sprite of height N pixels at coord (VX, VY). Read sprite data from memory at address in I.
 
 // Skip next instruction if key in VX pressed
-#define c8_opcodeEX9E(context, opcode)  _C8_SKIP_IF_CMP_TO_X(NN, =, context->keyPressed)    // NN necessary but dummy 
+#define c8_opcodeEX9E(context, opcode)  _C8_SKIP_IF_X(NN, context->m_keys[VX] != 0)    // NN necessary but dummy 
 // Skip next instruction if key in VX is not pressed
-#define c8_opcodeEXA1(context, opcode)  _C8_SKIP_IF_CMP_TO_X(NN, !, context->keyPressed)
+#define c8_opcodeEXA1(context, opcode)  _C8_SKIP_IF_X(NN, context->m_keys[VX] == 0)
 
 void c8_opcodeFX07(chip8_t *context, WORD opcode);    // Assign delay timer's value to VX
 void c8_opcodeFX0A(chip8_t *context, WORD opcode);    // Wait for any key press and store it in VX (blocking)
