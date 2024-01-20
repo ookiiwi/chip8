@@ -19,25 +19,25 @@
 #error This backend requires SDL 2.0.17+ because of SDL_RenderGeometry() function
 #endif
 
-#define TICK_COND(ticks, prevTicks, speed, cond, statement) do {        \
-    Uint64 delta = ticks - prevTicks;                                   \
+#define TICK_COND(ticks, prev_ticks, speed, cond, statement) do {       \
+    Uint64 delta = ticks - prev_ticks;                                  \
     if ((delta > (1000/speed)) && cond) {                               \
         statement                                                       \
-        prevTicks = ticks;                                              \
+        prev_ticks = ticks;                                             \
     }                                                                   \
 } while (0);
 
 #define TICK(ticks, prevTicks, speed, statement) TICK_COND(ticks, prevTicks, speed, 1, statement)
 
-#define SET_KEY(keyword) do {                                       \
-    int key = event.key.keysym.sym;                                 \
-    if (key >= 0x30 && key <= 0x39)                 /* 0 to 9 */    \
-        c8_##keyword##_key(context, key & 0x0F);                    \
-    else if (key >= 0x60 && key <= 0x66)            /* A to F */    \
-        c8_##keyword##_key(context, (key & 0x0F) + 0x9);            \
+#define SET_KEY(keyword) do {                                           \
+    int key = event.key.keysym.sym;                                     \
+    if (key >= 0x30 && key <= 0x39)                 /* 0 to 9 */        \
+        C8_##keyword##Key(context, key & 0x0F);                         \
+    else if (key >= 0x60 && key <= 0x66)            /* A to F */        \
+        C8_##keyword##Key(context, (key & 0x0F) + 0x9);                 \
 } while(0);
 
-void copy_c8_screenBuffer(SDL_Texture *texture, chip8_t *context) {
+void copy_c8_screenBuffer(SDL_Texture *texture, C8_Context *context) {
     void    *pixels;
     int      pitch;
     Uint32   *base;
@@ -49,7 +49,7 @@ void copy_c8_screenBuffer(SDL_Texture *texture, chip8_t *context) {
 
         for(int col = 0; col < SCREEN_WIDTH; ++col) {
             int i = (row * SCREEN_WIDTH) + col;
-            int color = (context->screenBuffer[i] == 0 ? 0x00 : 0xFF);
+            int color = (context->display[i] == 0 ? 0x00 : 0xFF);
 
             *base++ = (0xFF000000|(color << 16)|(color << 8)|color);
         }
@@ -61,7 +61,7 @@ void copy_c8_screenBuffer(SDL_Texture *texture, chip8_t *context) {
 const int AMPLITUDE = 28000;
 const int SAMPLE_RATE = 44100;
 
-struct beeper_t {
+struct Beeper {
     int              sample_nb;
     SDL_AudioSpec    want;
     SDL_AudioSpec    have;
@@ -87,7 +87,7 @@ Uint32 beep_stop_callback(Uint32 interval, void *param) {
 }
 
 void beep(void *userdata) {
-    beeper_t &beeper = *(beeper_t*)userdata;
+    Beeper &beeper = *(Beeper*)userdata;
 
     if (!beeper.is_opened) return;
 
@@ -96,7 +96,7 @@ void beep(void *userdata) {
     beeper.timerID = SDL_AddTimer(100, beep_stop_callback, NULL);
 }
 
-int load_prgm(chip8_t *context, int argc, char **argv) {
+int load_prgm(C8_Context *context, int argc, char **argv) {
     std::string dummy;
     const char *prgmPath, *gamePath, *configPath;
 
@@ -121,8 +121,8 @@ int load_prgm(chip8_t *context, int argc, char **argv) {
         }
     }
 
-    int rv = c8_load_prgm(context, gamePath, configPath);
-    c8_error_t err = c8_get_error(context);
+    int rv = C8_LoadProgram(context, gamePath, configPath);
+    C8_Error err = C8_GetError(context);
 
     if (err.err == C8_LOAD_CANNOT_OPEN_CONFIG) {
         fprintf(stderr, "Cannot open config: %s\n", configPath);
@@ -138,41 +138,42 @@ int main(int argc, char** argv) {
     }
     
     bool             bRunning;
-    chip8_t         _context;
-    chip8_t         *context;
+    bool             c8_tick;
     int              opcode;
+    C8_Context      _context;
+    C8_Context      *context;
+    C8_Profiler      profiler(_context);        // needs to be assigned here
+    C8_Beeper        c8_beeper;
+    Beeper           beeper;
+
     SDL_Window      *window;
     SDL_Renderer    *renderer;
     SDL_Texture     *texture;
     SDL_Rect         viewport;
     SDL_Rect         srcrect, dstrect;
-    bool             c8ShouldStep;
-    Uint64           ticks, prevTicks, prevDraws, prevTimersTicks;
-    C8_Profiler      profiler(_context);        // needs to be assigned here
-    beeper_t         beeper;
-    c8_beeper_t      c8_beeper;
+    Uint64           ticks, prev_ticks, prev_draws, prev_timers_ticks;
 
     /* init components */
-    bRunning = 1;
-    context = &_context;
-    ticks = 0;
-    prevTicks = 0;
-    prevDraws = 0;
-    prevTimersTicks = 0;
-    c8ShouldStep = true;
+    bRunning            = true;
+    c8_tick             = true;
+    context             = &_context;
+    ticks               = 0;
+    prev_ticks          = 0;
+    prev_draws          = 0;
+    prev_timers_ticks   = 0;
 
     /* audio componenents */
-    beeper.sample_nb = 0;
-    beeper.want.freq = SAMPLE_RATE;
-    beeper.want.format = AUDIO_S16SYS;
-    beeper.want.channels = 1;
-    beeper.want.samples = 2048;
-    beeper.want.callback = beep_callback;
-    beeper.want.userdata = &beeper.sample_nb;
-    beeper.timerID = 0;
-    beeper.is_opened = true;
+    beeper.sample_nb        = 0;
+    beeper.want.freq        = SAMPLE_RATE;
+    beeper.want.format      = AUDIO_S16SYS;
+    beeper.want.channels    = 1;
+    beeper.want.samples     = 2048;
+    beeper.want.callback    = beep_callback;
+    beeper.want.userdata    = &beeper.sample_nb;
+    beeper.timerID          = 0;
+    beeper.is_opened        = true;
 
-    c8_beeper.beep = beep;
+    c8_beeper.beep      = beep;
     c8_beeper.user_data = (void*)&beeper;
 
     if (SDL_OpenAudio(&beeper.want, &beeper.have) != 0) {
@@ -221,7 +222,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    c8_reset(context, &c8_beeper);
+    C8_Reset(context, &c8_beeper);
     int rv = load_prgm(context, argc, argv);
     if (rv != 0) {
         cleanup(context, texture, renderer, window);
@@ -249,12 +250,12 @@ int main(int argc, char** argv) {
     viewport.w = VIEWPORT_WIDTH;
     viewport.h = VIEWPORT_HEIGHT;
 
-    c8_clr_error(context);
+    C8_ClearError(context);
 
     while(bRunning) {
         SDL_Event event;
-        ticks = SDL_GetTicks64();
-        c8ShouldStep = profiler.shouldStep();
+        ticks   = SDL_GetTicks64();
+        c8_tick = profiler.shouldStep();
 
         while(SDL_PollEvent(&event)) {
             ImGui_ImplSDL2_ProcessEvent(&event);
@@ -264,31 +265,31 @@ int main(int argc, char** argv) {
                 bRunning = false;
                 break;
             } else if (SDL_KEYDOWN == event.type) {
-                SET_KEY(set);
+                SET_KEY(Set);
             } else if (SDL_KEYUP == event.type) {
-                SET_KEY(unset);
+                SET_KEY(Unset);
             }
         }
 
-TICK_COND(ticks, prevTicks, context->config.clockspeed, c8ShouldStep,
-        if ((opcode = c8_tick(context)) <= 0) {
+TICK_COND(ticks, prev_ticks, context->config.clockspeed, c8_tick,
+        if ((opcode = C8_Tick(context)) <= 0) {
             bRunning = false;
             break;
         }
 );
 
 // Timers clocked at 60hz    
-TICK_COND(ticks, prevTimersTicks, 60.0, c8ShouldStep,
-            c8_updateTimers(context);
+TICK_COND(ticks, prev_timers_ticks, 60.0, c8_tick,
+        C8_UpdateTimers(context);
 );
 
-TICK(ticks, prevDraws, context->config.fps,
+TICK(ticks, prev_draws, context->config.fps,
         // Start the Dear ImGui frame
         ImGui_ImplSDLRenderer2_NewFrame();
         ImGui_ImplSDL2_NewFrame();
         ImGui::NewFrame();
 
-        profiler.render(c8ShouldStep ? &opcode : nullptr);
+        profiler.render(c8_tick ? &opcode : nullptr);
 
         // Rendering
         ImGui::Render();

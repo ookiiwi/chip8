@@ -5,13 +5,13 @@
 
 #define MAX_OPCODE_SNAPSHOTS_COUNT 512
 
-_C8_OpcodeSnapshot::_C8_OpcodeSnapshot(const chip8_t &context) 
+_C8_OpcodeSnapshot::_C8_OpcodeSnapshot(const C8_Context &context) 
     :   registers(context.registers, &context.registers[15]),
         pc(context.pc-2),
         sp(context.sp),
         addressI(context.addressI),
-        dt(context.delayTimer),
-        st(context.soundTimer) {}
+        dt(context.delay_timer),
+        st(context.sound_timer) {}
 
 void C8_Profiler::render(const int *opcode) {
     static int selected_index = -1;
@@ -62,7 +62,6 @@ void C8_Profiler::render(const int *opcode) {
 
     ImGui::Text("Delay timer %04X", context.dt);
     ImGui::Text("Sound timer %04X", context.st);
-    //ImGui::Text("Key pressed %X",   context.keyPressed);
 
     ImGui::Unindent(16.f);
     ImGui::EndGroup();

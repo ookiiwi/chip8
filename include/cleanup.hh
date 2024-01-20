@@ -39,9 +39,9 @@ inline void cleanup<SDL_Surface>(SDL_Surface *surface) {
     SDL_FreeSurface(surface);
 }
 
-template<> void cleanup<chip8_t>(chip8_t *context) {
+template<> void cleanup<C8_Context>(C8_Context *context) {
     if (!context)   return;
-    c8_destroy(context);
+    C8_Destroy(context);
 }
 
 #endif

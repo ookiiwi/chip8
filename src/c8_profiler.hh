@@ -7,7 +7,7 @@
 #include <deque>
 
 struct _C8_OpcodeSnapshot {
-    _C8_OpcodeSnapshot(const chip8_t &context);
+    _C8_OpcodeSnapshot(const C8_Context &context);
 
     std::vector<BYTE>       registers;
     WORD                    pc;
@@ -19,12 +19,12 @@ struct _C8_OpcodeSnapshot {
 
 class C8_Profiler {
 public:
-    C8_Profiler(const chip8_t &context) : m_context(context), m_pause(false), m_step(false) {}
+    C8_Profiler(const C8_Context &context) : m_context(context), m_pause(false), m_step(false) {}
 
     void render(const int *opcode);
     bool shouldStep();
 private:
-    const chip8_t &m_context;
+    const C8_Context &m_context;
     bool m_pause;
     bool m_step;
     std::deque<WORD> m_opHistory;

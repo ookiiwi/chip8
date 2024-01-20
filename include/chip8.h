@@ -25,8 +25,8 @@ extern "C" {
 #define DEFAULT_FPS 60.0
 #define DEFAULT_WRAPY 1
 
-typedef struct chip8 chip8_t;
-typedef void (*C8_KeyChangeNotifier)(chip8_t*, int);
+typedef struct _C8_Context C8_Context;
+typedef void (*C8_KeyChangeNotifier)(C8_Context*, int);
 typedef void (*C8_BeepCallback)(void *);
 
 typedef enum {
@@ -39,44 +39,44 @@ typedef enum {
     C8_LOAD_MEMORY_BUFFER_TOO_LARGE,
     C8_DECODE_INVALID_OPCODE,
     C8_CLEAR_SCREEN
-} c8_error;
+} C8_ErrorEnum;
 
 typedef struct {
-    c8_error err;
+    C8_ErrorEnum err;
     char *msg;
-} c8_error_t;
+} C8_Error;
 
 typedef struct {
     char     name[63];
     int      wrapY;
     float    clockspeed;
     float    fps;
-} c8_config_t;
+} C8_Config;
 
 typedef struct {
     C8_BeepCallback beep;
     void            *user_data;
-} c8_beeper_t;
+} C8_Beeper;
 
 /**
  * @brief Chip8 context
 */
-struct chip8 {
+struct _C8_Context {
     BYTE                 *memory;                                        // 4KiB memory
     BYTE                 *registers;                                     // 8-bit registers V0 to VF
     WORD                  sp;                                            // stack pointer. 12 levels of nesting (0xEA0-0xEFF)
     WORD                  addressI;                                      // only 12 lowers bits used
     WORD                  pc;                                            // program counter
-    BYTE                 *screenBuffer;                                  // uint32 array in order to comply to SDL_Texture pixels array format
-    BYTE                  delayTimer;                                    // Both timers count at 60hz until reaching 0
-    BYTE                  soundTimer;
-    c8_error_t            m_error;
-    c8_config_t           config;
+    BYTE                 *display;                                       // uint32 array in order to comply to SDL_Texture pixels array format
+    BYTE                  delay_timer;                                   // Both timers count at 60hz until reaching 0
+    BYTE                  sound_timer;
+    C8_Error              m_error;
+    C8_Config             config;
     int                   m_keys[16];
     C8_KeyChangeNotifier  m_on_set_key;
-    int                   isRunning;
-    WORD                  lastOpcode;
-    c8_beeper_t          *beeper;
+    int                   is_running;
+    WORD                  last_opcode;
+    C8_Beeper            *beeper;
 };
 
 // font data
@@ -107,34 +107,31 @@ static const BYTE font[] = {
 #define VF (context->registers[0xF])
 
 /* Error handling */
-c8_error_t c8_get_error(chip8_t *context);
-void       c8_set_error(chip8_t *context, c8_error_t error);
-void       c8_clr_error(chip8_t *context);
+C8_Error C8_GetError(C8_Context *context);
+void     C8_SetError(C8_Context *context, C8_Error error);
+void     C8_ClearError(C8_Context *context);
 
 /* Setup */
-void c8_reset(chip8_t *context, c8_beeper_t *beeper);
-void c8_destroy(chip8_t *context);
-int  c8_load_prgm(chip8_t *context, const char *path, const char *configPath);
+void C8_Reset(C8_Context *context, C8_Beeper *beeper);
+void C8_Destroy(C8_Context *context);
+int  C8_LoadProgram(C8_Context *context, const char *path, const char *config_path);
 
 /* Fetch-decode */
-int  c8_tick(chip8_t *context);                 // Return opcode on success
-void c8_updateTimers(chip8_t *context);
-WORD c8_fetch(chip8_t *context);
-void c8_decode(chip8_t *context, WORD opcode);
-
-/* Memory access */
-void write_memory(chip8_t *context, WORD address, BYTE data);
-int  read_memory(chip8_t *context, WORD address);
+int  C8_Tick(C8_Context *context);                 // Return opcode on success
+void C8_UpdateTimers(C8_Context *context);
+WORD C8_Fetch(C8_Context *context);
+void C8_Decode(C8_Context *context, WORD opcode);
 
 /* Key handling */
-void c8_set_key(chip8_t *context, int key);
-void c8_unset_key(chip8_t *context, int key);
+void C8_SetKey(C8_Context *context, int key);
+void C8_UnsetKey(C8_Context *context, int key);
+
+#define INCREMENENT_PC  context->pc += 2
+#define DECREMENENT_PC  context->pc -= 2
 
 #define _C8_SKIP_IF_X(field, cond) do {                                                         \
     C8_OPCODE_SELECT_X##field(opcode);                                                          \
-    if ( cond ) {                                                                               \
-        (context)->pc += 2;                                                                     \
-    }                                                                                           \
+    if ( cond ) { INCREMENENT_PC; }                                                             \
 } while(0);
 
 #define _C8_SKIP_IF_CMP_TO_X(field, eqPrefix, rhs) _C8_SKIP_IF_X(field, (VX eqPrefix##= rhs))
@@ -143,93 +140,93 @@ void c8_unset_key(chip8_t *context, int key);
 
 #define _C8_SET_VX(field, rhs, assignPrefix) do {                                               \
     C8_OPCODE_SELECT_X##field(opcode);                                                          \
-    (context)->registers[X] assignPrefix##= rhs;                                                \
+    VX assignPrefix##= rhs;                                                                     \
 } while(0)
 
-#define _C8_SET_VX_WITH_NN(assignPrefix) _C8_SET_VX(NN, NN, assignPrefix)
-#define _C8_SET_VX_WITH_Y(assignPrefix)  _C8_SET_VX(YN, VY, assignPrefix)
+#define _C8_SET_VX_WITH_NN(assign_prefix) _C8_SET_VX(NN, NN, assign_prefix)
+#define _C8_SET_VX_WITH_Y(assign_prefix)  _C8_SET_VX(YN, VY, assign_prefix)
 
-#define _C8_SUB_BORROW(regNum1, regNum2) do {                                                   \
-    int res, noBorrow, a, b;                                                                    \
+#define _C8_SUB_BORROW(reg_num1, reg_num2) do {                                                 \
+    int res, no_borrow, a, b;                                                                   \
     C8_OPCODE_SELECT_XYN(opcode);                                                               \
-    a = (context)->registers[regNum1];                                                          \
-    b = (context)->registers[regNum2];                                                          \
+    a = (context)->registers[reg_num1];                                                         \
+    b = (context)->registers[reg_num2];                                                         \
     res = a - b;                                                                                \
-    noBorrow = (res >= 0);                                                                      \
-    VX  = noBorrow ? res : -res; /* implicitly truncate to 8 bits */                            \
-    VF = noBorrow;              /* no borrow flag */                                            \
+    no_borrow = (res >= 0);                                                                     \
+    VX  = no_borrow ? res : -res; /* implicitly truncate to 8 bits */                           \
+    VF  = no_borrow;              /* no borrow flag */                                          \
 } while(0)
 
 // Select X<field> from opcode and process <lhs> <pref>= <rhs>
-#define _ASSIGN(field, lhs, rhs, assignPrefix) do {                                             \
+#define _ASSIGN(field, lhs, rhs, assign_prefix) do {                                            \
     C8_OPCODE_SELECT_X##field(opcode);                                                          \
-    lhs assignPrefix##= rhs;                                                                    \
+    lhs assign_prefix##= rhs;                                                                   \
 } while(0)
 
 
 /* Instructions */
-void c8_opcode00E0(chip8_t *context, WORD opcode);    // clear screen
-void c8_opcode00EE(chip8_t *context, WORD opcode);    // return
-void c8_opcode1NNN(chip8_t *context, WORD opcode);    // Jump to address NNN
-void c8_opcode2NNN(chip8_t *context, WORD opcode);    // Call subroutine at NNN
+void C8_Opcode00E0(C8_Context *context, WORD opcode);    // clear screen
+void C8_Opcode00EE(C8_Context *context, WORD opcode);    // return
+void C8_Opcode1NNN(C8_Context *context, WORD opcode);    // Jump to address NNN
+void C8_Opcode2NNN(C8_Context *context, WORD opcode);    // Call subroutine at NNN
 
 // Skip next instruction if (VX == NN)
-#define c8_opcode3XNN(context, opcode)      _C8_SKIP_IF_CMP_XNN(=)
+#define C8_Opcode3XNN(context, opcode)      _C8_SKIP_IF_CMP_XNN(=)
 // Skip next instruction if (VX != NN)
-#define c8_opcode4XNN(context, opcode)      _C8_SKIP_IF_CMP_XNN(!)
+#define C8_Opcode4XNN(context, opcode)      _C8_SKIP_IF_CMP_XNN(!)
 // Skip next instruction if (VX == VY)
-#define c8_opcode5XY0(context, opcode)      _C8_SKIP_IF_CMP_XYN(=)
+#define C8_Opcode5XY0(context, opcode)      _C8_SKIP_IF_CMP_XYN(=)
 
 // Assign NN to VX
-#define c8_opcode6XNN(context, opcode)      _C8_SET_VX_WITH_NN()
+#define C8_Opcode6XNN(context, opcode)      _C8_SET_VX_WITH_NN()
 // Add NN to VX (carry flag unchanged)
-#define c8_opcode7XNN(context, opcode)      _C8_SET_VX_WITH_NN(+)    
+#define C8_Opcode7XNN(context, opcode)      _C8_SET_VX_WITH_NN(+)    
 // Assign VY to VX
-#define c8_opcode8XY0(context, opcode)      _C8_SET_VX_WITH_Y()
+#define C8_Opcode8XY0(context, opcode)      _C8_SET_VX_WITH_Y()
 // Assign (VX OR VY) to VX  (bitwise or)
-#define c8_opcode8XY1(context, opcode)      _C8_SET_VX_WITH_Y(|)
+#define C8_Opcode8XY1(context, opcode)      _C8_SET_VX_WITH_Y(|)
 // Assign (VX AND VY) to VX (bitwise and)
-#define c8_opcode8XY2(context, opcode)      _C8_SET_VX_WITH_Y(&)
+#define C8_Opcode8XY2(context, opcode)      _C8_SET_VX_WITH_Y(&)
 // Assign (VX XOR VY) to VX
-#define c8_opcode8XY3(context, opcode)      _C8_SET_VX_WITH_Y(^)
+#define C8_Opcode8XY3(context, opcode)      _C8_SET_VX_WITH_Y(^)
 
 // Substract VY to VX. VF set if no borrow
-#define c8_opcode8XY5(context, opcode)      _C8_SUB_BORROW(X, Y)
+#define C8_Opcode8XY5(context, opcode)      _C8_SUB_BORROW(X, Y)
 // Assign (VY - VX) to VX. VF is no borrow flag
-#define c8_opcode8XY7(context, opcode)      _C8_SUB_BORROW(Y, X)
+#define C8_Opcode8XY7(context, opcode)      _C8_SUB_BORROW(Y, X)
 
-void c8_opcode8XY4(chip8_t *context, WORD opcode);    // Add VY to VX. VF set if carry
-void c8_opcode8XY6(chip8_t *context, WORD opcode);    // Store LSB in VF and right shift VX by 1
-void c8_opcode8XYE(chip8_t *context, WORD opcode);    // Store MSB in VF and left shift VX by 1
+void C8_Opcode8XY4(C8_Context *context, WORD opcode);    // Add VY to VX. VF set if carry
+void C8_Opcode8XY6(C8_Context *context, WORD opcode);    // Store LSB in VF and right shift VX by 1
+void C8_Opcode8XYE(C8_Context *context, WORD opcode);    // Store MSB in VF and left shift VX by 1
 
 // Skip next instruction if (VX != VY)
-#define c8_opcode9XY0(context, opcode)   _C8_SKIP_IF_CMP_XYN(!)
+#define C8_Opcode9XY0(context, opcode)   _C8_SKIP_IF_CMP_XYN(!)
 
-void c8_opcodeANNN(chip8_t *context, WORD opcode);    // Assign address NNN to I
-void c8_opcodeBNNN(chip8_t *context, WORD opcode);    // Jump to address NNN + V0
-void c8_opcodeCXNN(chip8_t *context, WORD opcode);    // Assign (rand number AND NN) to VX
-void c8_opcodeDXYN(chip8_t *context, WORD opcode);    // Draw sprite of height N pixels at coord (VX, VY). Read sprite data from memory at address in I.
+void C8_OpcodeANNN(C8_Context *context, WORD opcode);    // Assign address NNN to I
+void C8_OpcodeBNNN(C8_Context *context, WORD opcode);    // Jump to address NNN + V0
+void C8_OpcodeCXNN(C8_Context *context, WORD opcode);    // Assign (rand number AND NN) to VX
+void C8_OpcodeDXYN(C8_Context *context, WORD opcode);    // Draw sprite of height N pixels at coord (VX, VY). Read sprite data from memory at address in I.
 
 // Skip next instruction if key in VX pressed
-#define c8_opcodeEX9E(context, opcode)  _C8_SKIP_IF_X(NN, context->m_keys[VX] != 0)    // NN necessary but dummy 
+#define C8_OpcodeEX9E(context, opcode)  _C8_SKIP_IF_X(NN, context->m_keys[VX] != 0)    // NN necessary but dummy 
 // Skip next instruction if key in VX is not pressed
-#define c8_opcodeEXA1(context, opcode)  _C8_SKIP_IF_X(NN, context->m_keys[VX] == 0)
+#define C8_OpcodeEXA1(context, opcode)  _C8_SKIP_IF_X(NN, context->m_keys[VX] == 0)
 
-void c8_opcodeFX07(chip8_t *context, WORD opcode);    // Assign delay timer's value to VX
-void c8_opcodeFX0A(chip8_t *context, WORD opcode);    // Wait for any key press and store it in VX (blocking)
+void C8_OpcodeFX07(C8_Context *context, WORD opcode);    // Assign delay timer's value to VX
+void C8_OpcodeFX0A(C8_Context *context, WORD opcode);    // Wait for any key press and store it in VX (blocking)
 
 // Set VX to delay timer
-#define c8_opcodeFX15(context, opcode)  _ASSIGN(NN, context->delayTimer, context->registers[X], )
+#define C8_OpcodeFX15(context, opcode)  _ASSIGN(NN, context->delay_timer, context->registers[X], )
 // Assign sound timer's value to VX
-void c8_opcodeFX18(chip8_t *context, WORD opcode);
+void C8_OpcodeFX18(C8_Context *context, WORD opcode);
 // Add VX to I. VF unchanged
-#define c8_opcodeFX1E(context, opcode)  _ASSIGN(NN, context->addressI,   context->registers[X], +)
+#define C8_OpcodeFX1E(context, opcode)  _ASSIGN(NN, context->addressI,   context->registers[X], +)
 // Set I to sprite address for the characheter in VX
-#define c8_opcodeFX29(context, opcode)  _ASSIGN(NN, context->addressI,   context->registers[X]*FONT_HEIGHT, )
+#define C8_OpcodeFX29(context, opcode)  _ASSIGN(NN, context->addressI,   context->registers[X]*FONT_HEIGHT, )
 
-void c8_opcodeFX33(chip8_t *context, WORD opcode);    // Store BCD representation of VX (hundreds at I, tens at I+1 and ones at I+2)
-void c8_opcodeFX55(chip8_t *context, WORD opcode);    // Dump V0 to VX (included) in memory, starting at address I (I unchanged)
-void c8_opcodeFX65(chip8_t *context, WORD opcode);    // Load memory content in V0 to VX (included), starting at address I (I unchanged)
+void C8_OpcodeFX33(C8_Context *context, WORD opcode);    // Store BCD representation of VX (hundreds at I, tens at I+1 and ones at I+2)
+void C8_OpcodeFX55(C8_Context *context, WORD opcode);    // Dump V0 to VX (included) in memory, starting at address I (I unchanged)
+void C8_OpcodeFX65(C8_Context *context, WORD opcode);    // Load memory content in V0 to VX (included), starting at address I (I unchanged)
 
 #ifdef __cplusplus
 }
