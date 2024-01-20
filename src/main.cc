@@ -1,19 +1,18 @@
 #include "chip8.h"
-#include "c8_disassembler.h"
 #include "c8_def.h"
-#include "util.h"
 #include "c8_profiler.hh"
 #include "cleanup.hh"
+#include "config.h"
+#include "loader.hh"
+#include "audio.hh"
+
 #include "imgui.h"
 #include "imgui_impl_sdl2.h"
 #include "imgui_impl_sdlrenderer2.h"
 #include <SDL.h>
-#include <SDL_audio.h>
 #include <math.h>
 #include <stdio.h>
-#include <sstream>
 #include <cassert>
-#include <vector>
 
 #if !SDL_VERSION_ATLEAST(2,0,17)
 #error This backend requires SDL 2.0.17+ because of SDL_RenderGeometry() function
@@ -37,7 +36,7 @@
         C8_##keyword##Key(context, (key & 0x0F) + 0x9);                 \
 } while(0);
 
-void copy_c8_screenBuffer(SDL_Texture *texture, C8_Context *context) {
+void copy_c8_display(SDL_Texture *texture, C8_Context *context) {
     void    *pixels;
     int      pitch;
     Uint32   *base;
@@ -58,79 +57,6 @@ void copy_c8_screenBuffer(SDL_Texture *texture, C8_Context *context) {
     SDL_UnlockTexture(texture);
 }
 
-const int AMPLITUDE = 28000;
-const int SAMPLE_RATE = 44100;
-
-struct Beeper {
-    int              sample_nb;
-    SDL_AudioSpec    want;
-    SDL_AudioSpec    have;
-    SDL_TimerID      timerID;
-    bool             is_opened;
-};
-
-// ref: https://stackoverflow.com/a/45002609
-void beep_callback(void *userdata, Uint8 *rawbuf, int bytes) {
-    Sint16 *buffer = (Sint16*)rawbuf;
-    int length = bytes / 2;
-    int &sample_nb(*(int*)userdata);
-
-    for (int i = 0; i < length; ++i, ++sample_nb) {
-        double time = (double)sample_nb / (double)SAMPLE_RATE;
-        buffer[i] = (Sint16)(AMPLITUDE * sin(2.0f * M_PI * 441.0f * time));
-    }
-}
-
-Uint32 beep_stop_callback(Uint32 interval, void *param) {
-    SDL_PauseAudio(1);
-    return 0;
-}
-
-void beep(void *userdata) {
-    Beeper &beeper = *(Beeper*)userdata;
-
-    if (!beeper.is_opened) return;
-
-    // play beep for 100 ms
-    SDL_PauseAudio(0);
-    beeper.timerID = SDL_AddTimer(100, beep_stop_callback, NULL);
-}
-
-int load_prgm(C8_Context *context, int argc, char **argv) {
-    std::string dummy;
-    const char *prgmPath, *gamePath, *configPath;
-
-    if (argc < 2) {
-        return 2;
-    }
-
-    prgmPath = argv[0];
-    gamePath = argv[1];
-
-    if (argc >= 3) {
-        configPath = argv[2];
-    } else {
-        // TODO: handle any OS path
-        int i = last_index(gamePath, '/');
-
-        if (i > 0) {
-            dummy = std::string(gamePath, i+1) + "config.cfg";
-            configPath = dummy.c_str();
-        } else {
-            configPath = NULL;
-        }
-    }
-
-    int rv = C8_LoadProgram(context, gamePath, configPath);
-    C8_Error err = C8_GetError(context);
-
-    if (err.err == C8_LOAD_CANNOT_OPEN_CONFIG) {
-        fprintf(stderr, "Cannot open config: %s\n", configPath);
-    }
-
-    return rv;
-}
-
 int main(int argc, char** argv) {
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_GAMECONTROLLER | SDL_INIT_AUDIO) != 0) {
         printf("SDL_Init Error: %s\n", SDL_GetError());
@@ -145,6 +71,9 @@ int main(int argc, char** argv) {
     C8_Profiler      profiler(_context);        // needs to be assigned here
     C8_Beeper        c8_beeper;
     Beeper           beeper;
+
+    C8Loader         loader;
+    Config           config;
 
     SDL_Window      *window;
     SDL_Renderer    *renderer;
@@ -162,26 +91,8 @@ int main(int argc, char** argv) {
     prev_draws          = 0;
     prev_timers_ticks   = 0;
 
-    /* audio componenents */
-    beeper.sample_nb        = 0;
-    beeper.want.freq        = SAMPLE_RATE;
-    beeper.want.format      = AUDIO_S16SYS;
-    beeper.want.channels    = 1;
-    beeper.want.samples     = 2048;
-    beeper.want.callback    = beep_callback;
-    beeper.want.userdata    = &beeper.sample_nb;
-    beeper.timerID          = 0;
-    beeper.is_opened        = true;
-
-    c8_beeper.beep      = beep;
+    c8_beeper.beep      = beeper.beep;
     c8_beeper.user_data = (void*)&beeper;
-
-    if (SDL_OpenAudio(&beeper.want, &beeper.have) != 0) {
-        SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Failed to open audio: %s", SDL_GetError());
-        beeper.is_opened = false;
-    } else if (beeper.want.format != beeper.have.format) {
-        SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Failed to get the desired AudioSpec");
-    }
 
     srcrect.w = SCREEN_WIDTH;
     srcrect.h = SCREEN_HEIGHT;
@@ -223,7 +134,7 @@ int main(int argc, char** argv) {
     }
 
     C8_Reset(context, &c8_beeper);
-    int rv = load_prgm(context, argc, argv);
+    int rv = loader.load(argc, argv, config, _context);
     if (rv != 0) {
         cleanup(context, texture, renderer, window);
         fprintf(stderr, "load_prgm Error: %d\n", rv);
@@ -271,7 +182,7 @@ int main(int argc, char** argv) {
             }
         }
 
-TICK_COND(ticks, prev_ticks, context->config.clockspeed, c8_tick,
+TICK_COND(ticks, prev_ticks, config.clockspeed, c8_tick,
         if ((opcode = C8_Tick(context)) <= 0) {
             bRunning = false;
             break;
@@ -283,7 +194,7 @@ TICK_COND(ticks, prev_timers_ticks, 60.0, c8_tick,
         C8_UpdateTimers(context);
 );
 
-TICK(ticks, prev_draws, context->config.fps,
+TICK(ticks, prev_draws, config.fps,
         // Start the Dear ImGui frame
         ImGui_ImplSDLRenderer2_NewFrame();
         ImGui_ImplSDL2_NewFrame();
@@ -296,17 +207,12 @@ TICK(ticks, prev_draws, context->config.fps,
         SDL_RenderSetScale(renderer, io.DisplayFramebufferScale.x, io.DisplayFramebufferScale.y);
         SDL_RenderClear(renderer);  // Needed as texture doesn't fill the renderer
 
-        copy_c8_screenBuffer(texture, context);
+        copy_c8_display(texture, context);
         SDL_RenderCopy(renderer, texture, &srcrect, &dstrect);
 
         ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData());
         SDL_RenderPresent(renderer);
 );
-    }
-
-    if (beeper.is_opened) {
-        SDL_RemoveTimer(beeper.timerID);
-        SDL_CloseAudio();
     }
 
     // Cleanup
