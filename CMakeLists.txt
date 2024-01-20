@@ -10,8 +10,7 @@ find_package(SDL2 REQUIRED)
 add_subdirectory(deps)
 
 add_library(chip8_core src/chip8.c)
-target_link_libraries(chip8_core PRIVATE inih)
 target_include_directories(chip8_core PUBLIC include/)
 
-add_executable(chip8 src/main.cc src/c8_profiler.cc)
-target_link_libraries(chip8 PRIVATE SDL2::SDL2 chip8_core imgui)
+add_executable(chip8 src/main.cc src/c8_profiler.cc src/config.c src/loader.cc src/audio.cc)
+target_link_libraries(chip8 PRIVATE SDL2::SDL2 chip8_core imgui inih)
