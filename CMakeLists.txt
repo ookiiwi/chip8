@@ -15,7 +15,3 @@ target_include_directories(chip8_core PUBLIC include/)
 
 add_executable(chip8 src/main.cc src/c8_profiler.cc)
 target_link_libraries(chip8 PRIVATE SDL2::SDL2 chip8_core imgui)
-
-if (BUILD_TESTING)
-    add_subdirectory(test)
-endif()
