@@ -3,6 +3,8 @@
 CHIP-8 emulator. My goal is to get a first hand on emulation and also to get deeper knowledge about C/C++.
 Check out [chipper](./CHIPPER/CHIPPER.DOC) to build your own roms.
 
+****** SCHIP GAMES NOT SUPPORTED YET !!! ******
+
 ## Dependencies
 
 - [SDL2](https://www.libsdl.org/). Check out the [installation guide](https://wiki.libsdl.org/SDL2/Installation) or [brew](https://formulae.brew.sh/formula/sdl2#default)
