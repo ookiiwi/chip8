@@ -5,7 +5,6 @@
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
-#include "ini.h"
 
 #define SET_ERROR_1(err)      C8_SetError(context, (C8_Error){err, ""})
 #define SET_ERROR_2(err, msg) C8_SetError(context, (C8_Error){err, msg})
@@ -51,7 +50,7 @@ void C8_Reset(C8_Context *context, C8_Beeper *beeper) {
     context->delay_timer    = 0;
     context->sound_timer    = 0;
     context->m_error        = (C8_Error){ C8_GOOD, "" };
-    context->config         = (C8_Config){ "", DEFAULT_WRAPY, DEFAULT_CLOCKSPEED, DEFAULT_FPS };
+    context->config         = (C8_Config){ DEFAULT_WRAPY };
     context->m_on_set_key   = NULL;
     context->is_running     = 1;
     context->beeper         = beeper;
@@ -69,25 +68,7 @@ void C8_Destroy(C8_Context *context) {
     free(context->display);
 }
 
-static int config_handler(void *user, const char *section, const char *name, const char *value) {
-    C8_Config *config = (C8_Config*)user;
-
-    if (strcmp(section, config->name) == 0) {
-        if (strcmp(name, "wrapY") == 0) {
-            config->wrapY = atoi(value);
-        } else if (strcmp(name, "clockspeed") == 0) {
-            config->clockspeed = atof(value);
-        } else if (strcmp(name, "fps") == 0) {
-            config->fps = atof(value);
-        } else {
-            return -1;
-        }
-    }
-
-    return 0;
-}
-
-int C8_LoadProgram(C8_Context *context, const char *path, const char *configPath) {
+int C8_LoadProgram(C8_Context *context, const char *path) {
     FILE *fp;
     size_t sz;
     int filenameStart;
@@ -112,15 +93,6 @@ int C8_LoadProgram(C8_Context *context, const char *path, const char *configPath
     fread((void*)(context->memory + USER_MEMORY_START), sz, 1, fp);
     
     fclose(fp);
-
-    if (configPath != NULL && (filenameStart = last_index(path, '/')) >= 0 && filenameStart < strlen(path)) {
-        strcpy(context->config.name, (path + filenameStart + 1));
-
-        // load config
-        if (ini_parse(configPath, config_handler, &(context->config)) < 0) {
-            SET_ERROR(C8_LOAD_CANNOT_OPEN_CONFIG);  // Non-fatal error
-        }
-    }
 
     return 0;
 }
@@ -294,7 +266,7 @@ void C8_OpcodeDXYN(C8_Context *context, WORD opcode) {
          
         py = (y + row);
         
-        if (context->config.wrapY) {
+        if (context->config.wrapy) {
             py %= SCREEN_HEIGHT;
         } else if (py >= SCREEN_HEIGHT) {
             break;

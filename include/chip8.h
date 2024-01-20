@@ -21,8 +21,6 @@ extern "C" {
 #define SCREEN_BUFFER_SIZE_IN_BITS  ( SCREEN_WIDTH * SCREEN_HEIGHT)
 #define SCREEN_BUFFER_SIZE_IN_BYTES ( SCREEN_BUFFER_SIZE_IN_BITS / 8 )
 
-#define DEFAULT_CLOCKSPEED 800.0
-#define DEFAULT_FPS 60.0
 #define DEFAULT_WRAPY 1
 
 typedef struct _C8_Context C8_Context;
@@ -47,10 +45,7 @@ typedef struct {
 } C8_Error;
 
 typedef struct {
-    char     name[63];
-    int      wrapY;
-    float    clockspeed;
-    float    fps;
+    int      wrapy;
 } C8_Config;
 
 typedef struct {
@@ -114,7 +109,7 @@ void     C8_ClearError(C8_Context *context);
 /* Setup */
 void C8_Reset(C8_Context *context, C8_Beeper *beeper);
 void C8_Destroy(C8_Context *context);
-int  C8_LoadProgram(C8_Context *context, const char *path, const char *config_path);
+int  C8_LoadProgram(C8_Context *context, const char *path);
 
 /* Fetch-decode */
 int  C8_Tick(C8_Context *context);                 // Return opcode on success
