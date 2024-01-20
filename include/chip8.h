@@ -27,6 +27,7 @@ extern "C" {
 
 typedef struct chip8 chip8_t;
 typedef void (*C8_KeyChangeNotifier)(chip8_t*, int);
+typedef void (*C8_BeepCallback)(void *);
 
 typedef enum {
     C8_GOOD,
@@ -52,6 +53,11 @@ typedef struct {
     float    fps;
 } c8_config_t;
 
+typedef struct {
+    C8_BeepCallback beep;
+    void            *user_data;
+} c8_beeper_t;
+
 /**
  * @brief Chip8 context
 */
@@ -70,6 +76,7 @@ struct chip8 {
     C8_KeyChangeNotifier  m_on_set_key;
     int                   isRunning;
     WORD                  lastOpcode;
+    c8_beeper_t          *beeper;
 };
 
 // font data
@@ -105,7 +112,7 @@ void       c8_set_error(chip8_t *context, c8_error_t error);
 void       c8_clr_error(chip8_t *context);
 
 /* Setup */
-void c8_reset(chip8_t *context);
+void c8_reset(chip8_t *context, c8_beeper_t *beeper);
 void c8_destroy(chip8_t *context);
 int  c8_load_prgm(chip8_t *context, const char *path, const char *configPath);
 
@@ -214,7 +221,7 @@ void c8_opcodeFX0A(chip8_t *context, WORD opcode);    // Wait for any key press 
 // Set VX to delay timer
 #define c8_opcodeFX15(context, opcode)  _ASSIGN(NN, context->delayTimer, context->registers[X], )
 // Assign sound timer's value to VX
-#define c8_opcodeFX18(context, opcode)  _ASSIGN(NN, context->soundTimer, context->registers[X], )
+void c8_opcodeFX18(chip8_t *context, WORD opcode);
 // Add VX to I. VF unchanged
 #define c8_opcodeFX1E(context, opcode)  _ASSIGN(NN, context->addressI,   context->registers[X], +)
 // Set I to sprite address for the characheter in VX

@@ -28,7 +28,7 @@ void       c8_clr_error(chip8_t *context) { c8_set_error(context, (c8_error_t){ 
 
 /* Setup */
 
-void c8_reset(chip8_t *context) {
+void c8_reset(chip8_t *context, c8_beeper_t *beeper) {
     context->memory         = (BYTE*)calloc(MEMORY_SIZE_IN_BYTES, sizeof(BYTE));
     context->registers      = (BYTE*)calloc(REGISTER_COUNT, sizeof(BYTE));
     context->screenBuffer   = (BYTE*)calloc(SCREEN_BUFFER_SIZE_IN_BITS, sizeof(BYTE));
@@ -41,6 +41,7 @@ void c8_reset(chip8_t *context) {
     context->config         = (c8_config_t){ "", DEFAULT_WRAPY, DEFAULT_CLOCKSPEED, DEFAULT_FPS };
     context->m_on_set_key   = NULL;
     context->isRunning      = 1;
+    context->beeper         = beeper;
 
     // preset keys to 0
     memset(context->m_keys, 0, sizeof context->m_keys);
@@ -136,7 +137,6 @@ int c8_tick(chip8_t *context) {
 void c8_updateTimers(chip8_t *context) {
     if (context->delayTimer) --context->delayTimer;
     if (context->soundTimer) {
-        // TODO: beep
         --context->soundTimer;
     }
 }
@@ -338,6 +338,14 @@ void wait_for_key(chip8_t *context, int key) {
 void c8_opcodeFX0A(chip8_t *context, WORD opcode) {
     context->isRunning = 0;
     context->m_on_set_key = wait_for_key;
+}
+
+void c8_opcodeFX18(chip8_t *context, WORD opcode) { 
+    _ASSIGN(NN, context->soundTimer, context->registers[X], );
+
+    if (context->beeper != NULL) {
+        context->beeper->beep(context->beeper->user_data);
+    }
 }
 
 void c8_opcodeFX33(chip8_t *context, WORD opcode) {
