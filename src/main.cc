@@ -8,6 +8,8 @@
 #include "imgui_impl_sdl2.h"
 #include "imgui_impl_sdlrenderer2.h"
 #include <SDL.h>
+#include <SDL_audio.h>
+#include <math.h>
 #include <stdio.h>
 #include <sstream>
 #include <cassert>
@@ -56,6 +58,43 @@ void copy_c8_screenBuffer(SDL_Texture *texture, chip8_t *context) {
     SDL_UnlockTexture(texture);
 }
 
+const int AMPLITUDE = 28000;
+const int SAMPLE_RATE = 44100;
+
+struct beeper_t {
+    int              sample_nb;
+    SDL_AudioSpec    want;
+    SDL_AudioSpec    have;
+    SDL_TimerID      timerID;
+    bool             is_opened;
+};
+
+void beep_callback(void *userdata, Uint8 *rawbuf, int bytes) {
+    Sint16 *buffer = (Sint16*)rawbuf;
+    int length = bytes / 2;
+    int &sample_nb(*(int*)userdata);
+
+    for (int i = 0; i < length; ++i, ++sample_nb) {
+        double time = (double)sample_nb / (double)SAMPLE_RATE;
+        buffer[i] = (Sint16)(AMPLITUDE * sin(2.0f * M_PI * 441.0f * time));
+    }
+}
+
+Uint32 beep_stop_callback(Uint32 interval, void *param) {
+    SDL_PauseAudio(1);
+    return 0;
+}
+
+void beep(void *userdata) {
+    beeper_t &beeper = *(beeper_t*)userdata;
+
+    if (!beeper.is_opened) return;
+
+    // play beep for 100 ms
+    SDL_PauseAudio(0);
+    beeper.timerID = SDL_AddTimer(100, beep_stop_callback, NULL);
+}
+
 int load_prgm(chip8_t *context, int argc, char **argv) {
     std::string dummy;
     const char *prgmPath, *gamePath, *configPath;
@@ -92,6 +131,11 @@ int load_prgm(chip8_t *context, int argc, char **argv) {
 }
 
 int main(int argc, char** argv) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_GAMECONTROLLER | SDL_INIT_AUDIO) != 0) {
+        printf("SDL_Init Error: %s\n", SDL_GetError());
+        return 1;
+    }
+    
     bool             bRunning;
     chip8_t         _context;
     chip8_t         *context;
@@ -100,10 +144,12 @@ int main(int argc, char** argv) {
     SDL_Renderer    *renderer;
     SDL_Texture     *texture;
     SDL_Rect         viewport;
+    SDL_Rect         srcrect, dstrect;
     bool             c8ShouldStep;
     Uint64           ticks, prevTicks, prevDraws, prevTimersTicks;
     C8_Profiler      profiler(_context);        // needs to be assigned here
-    SDL_Rect         srcrect, dstrect;
+    beeper_t         beeper;
+    c8_beeper_t      c8_beeper;
 
     /* init components */
     bRunning = 1;
@@ -114,6 +160,27 @@ int main(int argc, char** argv) {
     prevTimersTicks = 0;
     c8ShouldStep = true;
 
+    /* audio componenents */
+    beeper.sample_nb = 0;
+    beeper.want.freq = SAMPLE_RATE;
+    beeper.want.format = AUDIO_S16SYS;
+    beeper.want.channels = 1;
+    beeper.want.samples = 2048;
+    beeper.want.callback = beep_callback;
+    beeper.want.userdata = &beeper.sample_nb;
+    beeper.timerID = 0;
+    beeper.is_opened = true;
+
+    c8_beeper.beep = beep;
+    c8_beeper.user_data = (void*)&beeper;
+
+    if (SDL_OpenAudio(&beeper.want, &beeper.have) != 0) {
+        SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Failed to open audio: %s", SDL_GetError());
+        beeper.is_opened = false;
+    } else if (beeper.want.format != beeper.have.format) {
+        SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Failed to get the desired AudioSpec");
+    }
+
     srcrect.w = SCREEN_WIDTH;
     srcrect.h = SCREEN_HEIGHT;
     srcrect.x = 0;
@@ -122,11 +189,6 @@ int main(int argc, char** argv) {
     dstrect.h = SCREEN_HEIGHT * PIXEL_SCALE;
     dstrect.x = 0;
     dstrect.y = 0;
-
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_GAMECONTROLLER) != 0) {
-        printf("SDL_Init Error: %s\n", SDL_GetError());
-        return 1;   
-    }
 
     // From 2.0.18: Enable native IME.
 #ifdef SDL_HINT_IME_SHOW_UI
@@ -158,7 +220,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    c8_reset(context);
+    c8_reset(context, &c8_beeper);
     int rv = load_prgm(context, argc, argv);
     if (rv != 0) {
         cleanup(context, texture, renderer, window);
@@ -238,6 +300,11 @@ TICK(ticks, prevDraws, context->config.fps,
         ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData());
         SDL_RenderPresent(renderer);
 );
+    }
+
+    if (beeper.is_opened) {
+        SDL_RemoveTimer(beeper.timerID);
+        SDL_CloseAudio();
     }
 
     // Cleanup
