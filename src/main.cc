@@ -69,6 +69,7 @@ struct beeper_t {
     bool             is_opened;
 };
 
+// ref: https://stackoverflow.com/a/45002609
 void beep_callback(void *userdata, Uint8 *rawbuf, int bytes) {
     Sint16 *buffer = (Sint16*)rawbuf;
     int length = bytes / 2;
