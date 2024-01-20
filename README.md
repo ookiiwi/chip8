@@ -12,7 +12,7 @@ Check out [chipper](./CHIPPER/CHIPPER.DOC) to build your own roms.
 ## Build
 
 ```sh
-$ git clone https://github.com/ookiiwi/chip8.git
+$ git clone --recurse-submodules -j8 https://github.com/ookiiwi/chip8.git
 $ cd chip8
 $ mkdir build
 $ cmake ..
