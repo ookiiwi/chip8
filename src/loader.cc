@@ -5,9 +5,18 @@
 #include <algorithm>
 #include <cstdio>
 
-int C8Loader::load(int argc, char **argv, Config &config, C8_Context &context) {
-    m_parse_args(argc, argv);
+static const char *help_msg = " \
+Usage: chip8 <GAME_PATH> [CONFIG_PATH] \
+";
 
+int C8Loader::load(int argc, char **argv, Config &config, C8_Context &context) {
+    if (m_parse_args(argc, argv) != 0) {
+        fprintf(stderr, "Usage: %s <GAME_PATH> [CONFIG_PATH]\n", argv[0]);
+
+        return -1;
+    }
+    
+    
     int c_rv = m_load_config(config);
     int rv = m_load_prgm(config, context);
 
@@ -23,8 +32,12 @@ int C8Loader::load(int argc, char **argv, Config &config, C8_Context &context) {
     return 0;
 }
 
-void C8Loader::m_parse_args(int argc, char **argv) {
+int C8Loader::m_parse_args(int argc, char **argv) {
     std::size_t found;
+
+    if (argc < 2) {
+        return -1;
+    }
 
     prgm_path   = argv[0];
     game_path   = argv[1];
@@ -37,6 +50,8 @@ void C8Loader::m_parse_args(int argc, char **argv) {
     } else {
         config_path = game_path.substr(0, found+1) + "config.cfg";
     }
+
+    return 0;
 }
 
 int C8Loader::m_load_config(Config &config) {

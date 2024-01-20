@@ -16,7 +16,7 @@ public:
     std::string game_name;
 
 private:
-    void    m_parse_args(int argc, char **argv);
+    int     m_parse_args(int argc, char **argv);
     int     m_load_config(Config &config);
     int     m_load_prgm(const Config &config, C8_Context &context);
 };
