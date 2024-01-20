@@ -38,27 +38,18 @@
 void copy_c8_screenBuffer(SDL_Texture *texture, chip8_t *context) {
     void    *pixels;
     int      pitch;
-    Uint8   *base;
+    Uint32   *base;
 
     SDL_LockTexture(texture, NULL, &pixels, &pitch);
 
     for(int row = 0; row < SCREEN_HEIGHT; ++row) {
-        int y = row * PIXEL_SCALE;
+        base = (Uint32*)((Uint8*)pixels + row * pitch);
 
         for(int col = 0; col < SCREEN_WIDTH; ++col) {
-            int x = col * PIXEL_SCALE;
             int i = (row * SCREEN_WIDTH) + col;
             int color = (context->screenBuffer[i] == 0 ? 0x00 : 0xFF);
 
-            for(int i = 0; i < PIXEL_SCALE; ++i) {          // fill on x
-                for (int j = 0; j < PIXEL_SCALE; ++j)  {    // fill on y
-                    base = ((Uint8*)pixels) + (4 * ((y + j) * VIEWPORT_WIDTH + x + i));
-                    base[0] = color;
-                    base[1] = color;
-                    base[2] = color;
-                    base[3] = 0xFF;
-                }
-            }
+            *base++ = (0xFF000000|(color << 16)|(color << 8)|color);
         }
     }
 
@@ -112,6 +103,7 @@ int main(int argc, char** argv) {
     bool             c8ShouldStep;
     Uint64           ticks, prevTicks, prevDraws, prevTimersTicks;
     C8_Profiler      profiler(_context);        // needs to be assigned here
+    SDL_Rect         srcrect, dstrect;
 
     /* init components */
     bRunning = 1;
@@ -121,6 +113,15 @@ int main(int argc, char** argv) {
     prevDraws = 0;
     prevTimersTicks = 0;
     c8ShouldStep = true;
+
+    srcrect.w = SCREEN_WIDTH;
+    srcrect.h = SCREEN_HEIGHT;
+    srcrect.x = 0;
+    srcrect.y = 0;
+    dstrect.w = SCREEN_WIDTH  * PIXEL_SCALE;
+    dstrect.h = SCREEN_HEIGHT * PIXEL_SCALE;
+    dstrect.x = 0;
+    dstrect.y = 0;
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_GAMECONTROLLER) != 0) {
         printf("SDL_Init Error: %s\n", SDL_GetError());
@@ -232,7 +233,7 @@ TICK(ticks, prevDraws, context->config.fps,
         SDL_RenderClear(renderer);  // Needed as texture doesn't fill the renderer
 
         copy_c8_screenBuffer(texture, context);
-        SDL_RenderCopy(renderer, texture, NULL, &viewport);
+        SDL_RenderCopy(renderer, texture, &srcrect, &dstrect);
 
         ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData());
         SDL_RenderPresent(renderer);
