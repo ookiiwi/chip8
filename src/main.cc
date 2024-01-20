@@ -137,7 +137,6 @@ int main(int argc, char** argv) {
     int rv = loader.load(argc, argv, config, _context);
     if (rv != 0) {
         cleanup(context, texture, renderer, window);
-        fprintf(stderr, "load_prgm Error: %d\n", rv);
         SDL_Quit();
         return 1;
     }
