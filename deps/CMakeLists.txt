@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.18)
 project(deps LANGUAGES CXX)
 
 find_package(SDL2 REQUIRED)
