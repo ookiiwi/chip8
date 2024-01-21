@@ -5,9 +5,7 @@ Check out [chipper](./CHIPPER/CHIPPER.DOC) to build your own roms.
 
 ## Dependencies
 
-- [SDL2](https://www.libsdl.org/). Check out the [installation guide](https://wiki.libsdl.org/SDL2/Installation) or [brew](https://formulae.brew.sh/formula/sdl2#default)
-- [ImGui](https://github.com/ocornut/imgui)
-- [inih](https://github.com/benhoyt/inih)
+- [SDL2](https://www.libsdl.org/) (>= 2.0.17, use `sdl2-config --version`). Check out the [installation guide](https://wiki.libsdl.org/SDL2/Installation) or [brew](https://formulae.brew.sh/formula/sdl2#default)
 
 ## Build
 
