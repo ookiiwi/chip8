@@ -8,6 +8,7 @@ extern "C" {
 #include "c8_helper.h"
 #include "c8_decode.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 // Don't forget to free returned string
@@ -64,12 +65,19 @@ inline void c8_disassemble8XY3(char **context, WORD opcode) { FMT_XY("XOR") }
 
 inline C8_DECODE_FUNC_GEN(c8_dec, char **, c8_disassemble)
 
-// Don't forget to free returned string if not NULL
-inline char *c8_disassemble(WORD opcode) { 
+// dst must be large enough, e.g const char dst[255];
+inline int c8_disassemble(WORD opcode, char *dst) { 
     char *res = NULL;
-    c8_dec(&res, opcode); 
+    c8_dec(&res, opcode);
 
-    return res;
+    if (res != NULL) {
+        strcpy(res, dst);
+        free((void*)res);
+
+        return 0;
+    }
+
+    return -1;
 }
 
 #ifdef __cplusplus
