@@ -3,6 +3,8 @@
 #include "c8_def.h"
 #include "imgui.h"
 
+#include <cstdio> // snprintf
+
 #define MAX_OPCODE_SNAPSHOTS_COUNT 512
 
 _C8_OpcodeSnapshot::_C8_OpcodeSnapshot(const C8_Context &context) 
@@ -89,16 +91,16 @@ void C8_Profiler::render(const int *opcode) {
     size_t i = 0;
     for(const auto e : m_opHistory) {
         char text[64];
-        const char *s = c8_disassemble(e);
+        char s[255];
+        
+        int rv = c8_disassemble(e, s);
 
-        if (s != NULL) {
+        if (rv == 0) {
             snprintf(text, sizeof text / sizeof text[0], "$%04X %04X\t%s##%zu", m_opSnapshots.at(i).pc, e, s, i);
 
             if (ImGui::Selectable(text, selected_index == i)) {
                 selected_index = i;
             }
-
-            free((void*)s);
         }
 
         ++i;
